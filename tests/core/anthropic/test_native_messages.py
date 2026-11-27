@@ -242,7 +242,7 @@ def test_native_top_level_cache_and_tier_survive_and_cannot_be_shadowed() -> Non
         build_native_messages_request(request, options=NativeMessagesOptions("m", 1024))
 
 
-def test_unknown_native_field_is_rejected_instead_of_lost() -> None:
+def test_unknown_native_field_is_forwarded() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -250,8 +250,10 @@ def test_unknown_native_field_is_rejected_instead_of_lost() -> None:
             "future_control": {"mode": "required"},
         }
     )
-    with pytest.raises(NativeMessagesError, match="future_control"):
-        build_native_messages_request(request, options=NativeMessagesOptions("m", 1024))
+    prepared = build_native_messages_request(
+        request, options=NativeMessagesOptions("m", 1024)
+    )
+    assert prepared.body["future_control"] == {"mode": "required"}
 
 
 @pytest.mark.parametrize("value", [True, False])

@@ -119,7 +119,7 @@ def encode_openai_chat_tool_names(
 
 
 def _request_tool_names(request: MessagesRequest) -> Iterable[str]:
-    for tool in request.tools or ():
+    for tool in request.named_tools:
         yield tool.name
 
     tool_choice = request.tool_choice

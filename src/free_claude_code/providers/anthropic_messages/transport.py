@@ -50,6 +50,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.core.tool_call_scope import ToolCallScope
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderExecution,
@@ -224,7 +225,7 @@ class AnthropicMessagesTransport:
         reasoning: ReasoningPolicy,
         capabilities: MessagesModelCapabilities,
     ) -> ResponsesMessagesRequest:
-        validate_history(request.model_dump(mode="json"))
+        validate_history(request.model_dump(mode="json"), "responses")
         try:
             options = resolve_messages_options(
                 model=request.model,
@@ -341,6 +342,7 @@ class AnthropicMessagesTransport:
             request_id=request_id,
             response_model=response_model or request.model,
             continuation=continuation,
+            constrain_tool_calls=True,
             presenter_factory=lambda origin: GeminiMessagesStream(
                 response_id=response_id,
                 model=response_model or request.model,
@@ -379,6 +381,7 @@ class AnthropicMessagesTransport:
             request_id=request_id,
             response_model=response_model or request.model,
             continuation=continuation,
+            constrain_tool_calls=request.constrains_returned_calls,
             presenter_factory=lambda origin: ChatMessagesStream(
                 model=response_model or request.model,
                 origin=origin,
@@ -408,6 +411,7 @@ class AnthropicMessagesTransport:
             endpoint_context=endpoint_context,
             request_id=request_id,
             response_model=response_model or request.model,
+            constrain_tool_calls=True,
             presenter_factory=lambda origin: AnthropicToResponsesStream(
                 request,
                 public_model=response_model or request.model,
@@ -425,6 +429,7 @@ class AnthropicMessagesTransport:
         request_id: str | None,
         response_model: str,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
+        constrain_tool_calls: bool = False,
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
         forwarding: _Forwarding | None = None,
@@ -440,6 +445,7 @@ class AnthropicMessagesTransport:
             execution=execution,
             response_model=response_model,
             presenter_factory=presenter_factory,
+            constrain_tool_calls=constrain_tool_calls,
             continuation=continuation,
             forwarding=forwarding,
         )
@@ -466,6 +472,7 @@ class AnthropicMessagesTransport:
         execution: ProviderExecution,
         response_model: str,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
+        constrain_tool_calls: bool,
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
         forwarding: _Forwarding | None = None,
@@ -491,6 +498,7 @@ class AnthropicMessagesTransport:
                     transport=self,
                     endpoint=endpoint,
                     presenter_factory=presenter_factory,
+                    constrain_tool_calls=constrain_tool_calls,
                     betas=betas,
                     forwarding=forwarding,
                 ),
@@ -516,6 +524,7 @@ class _MessagesAttempt(TransportAttempt):
         transport: AnthropicMessagesTransport,
         endpoint: RequestEndpoint,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
+        constrain_tool_calls: bool,
         betas: tuple[str, ...],
         forwarding: _Forwarding | None,
     ) -> None:
@@ -527,7 +536,11 @@ class _MessagesAttempt(TransportAttempt):
         self._forwarding = forwarding
         self._presenter: _Presenter | None = None
         self._request: httpx.Request | None = None
-        self._tool_buffer = MessagesToolCallBuffer()
+        self._tool_buffer = MessagesToolCallBuffer(
+            ToolCallScope.from_body(self.body, "messages")
+            if constrain_tool_calls
+            else None
+        )
         self._stopped = False
 
     @property

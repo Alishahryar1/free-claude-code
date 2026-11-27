@@ -313,3 +313,16 @@ async def test_cleanup(cohere_provider: OpenAIChatProvider) -> None:
     await cohere_provider.cleanup()
 
     cohere_provider._client.close.assert_called_once()
+
+
+def test_required_serial_tool_calls_are_rejected(
+    cohere_provider: OpenAIChatProvider,
+) -> None:
+    request = make_request(
+        tools=[{"name": "read", "input_schema": {"type": "object"}}],
+        tool_choice={"type": "auto", "disable_parallel_tool_use": True},
+    )
+    with pytest.raises(InvalidRequestError, match="serial tool calls"):
+        cohere_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )

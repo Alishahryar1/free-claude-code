@@ -11,11 +11,12 @@ from free_claude_code.core.json_types import (
 
 from ..anthropic.content import get_block_attr, get_block_type
 from ..anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
+from ..anthropic.web_history import public_search_result, web_history_text
 from ..history_replay import (
     ReplayRecord,
     decode_replay,
     is_replay,
-    tool_history_context,
+    validate_hosted_tool_history,
 )
 from .errors import GeminiConversionError
 
@@ -35,11 +36,20 @@ def restore_web_search_history(
     messages: Iterable[JsonObject],
 ) -> Iterator[JsonObject]:
     for message in messages:
-        blocks = message.get("content")
-        if message["role"] != "assistant" or not isinstance(blocks, list):
+        content = message.get("content")
+        if message["role"] != "assistant" or not isinstance(content, list):
             yield message
             continue
-        blocks = list(json_objects(blocks))
+        blocks: list[JsonObject] = list(json_objects(content))
+        if fetch_blocks := [block for block in blocks if _is_fetch(block)]:
+            validate_hosted_tool_history(fetch_blocks)
+            blocks = [
+                {"type": "text", "text": web_history_text(block)}
+                if _is_fetch(block)
+                else block
+                for block in blocks
+            ]
+            message = {**message, "content": blocks}
         search_ids = [json_text(block["id"]) for block in blocks if _is_search(block)]
         if not search_ids:
             yield message
@@ -57,7 +67,7 @@ def restore_web_search_history(
             yield {
                 **message,
                 "content": [
-                    {"type": "text", "text": tool_history_context(block)}
+                    {"type": "text", "text": web_history_text(block)}
                     if _is_search(block) or _is_search_result(block)
                     else block
                     for block in blocks
@@ -77,6 +87,12 @@ def _is_search(block: JsonObject) -> bool:
 
 def _is_search_result(block: JsonObject) -> bool:
     return block.get("type") == "web_search_tool_result"
+
+
+def _is_fetch(block: JsonObject) -> bool:
+    return block.get("type") == "web_fetch_tool_result" or (
+        block.get("type") == "server_tool_use" and block.get("name") == "web_fetch"
+    )
 
 
 def _restore_turn(
@@ -132,7 +148,7 @@ def _restore_turn(
             "name": name,
             "input": args,
         }
-        payload = by_id[use_id]["content"]
+        payload = public_search_result(by_id[use_id]["content"])
         results.append(
             {
                 "type": "tool_result",

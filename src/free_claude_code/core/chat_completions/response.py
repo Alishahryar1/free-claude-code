@@ -4,6 +4,7 @@ import json
 import time
 from collections.abc import Mapping
 from copy import deepcopy
+from typing import Literal
 from uuid import uuid4
 
 from ..failures import ExecutionFailure, FailureKind
@@ -95,15 +96,24 @@ class ChatOutput:
             }
         )
 
-    def tool(self, index: int, call_id: str, name: str, arguments: str) -> list[str]:
+    def tool(
+        self,
+        index: int,
+        call_id: str,
+        name: str,
+        arguments: str,
+        *,
+        kind: Literal["function", "custom"] = "function",
+    ) -> list[str]:
+        field = "input" if kind == "custom" else "arguments"
         return self.delta(
             {
                 "tool_calls": [
                     {
                         "index": index,
                         "id": call_id,
-                        "type": "function",
-                        "function": {"name": name, "arguments": arguments},
+                        "type": kind,
+                        kind: {"name": name, field: arguments},
                     }
                 ]
             }

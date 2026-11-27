@@ -20,6 +20,7 @@ from .tool_search import (
     is_client_search,
     is_unfinished_search_call,
     normalize_tool_search,
+    public_search_tools,
     resolve_client_search_history,
     search_function_name,
 )
@@ -29,8 +30,11 @@ from .tools import (
     custom_tool_input_schema,
     custom_tool_input_text,
     custom_tool_input_text_from_arguments,
+    definition_identity,
     flatten_responses_tool_name,
+    include_namespace_description,
     optional_str,
+    required_custom_tool_input,
     required_str,
 )
 
@@ -42,6 +46,8 @@ class ResponsesToolPolicy:
     text_only_web_search: bool = False
     client_tool_search: bool = False
     flatten_namespaces: bool = False
+    direct_tools_only: bool = False
+    supports_strict: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +66,8 @@ class ResponsesToolAdapter:
     ) -> None:
         self.original = request
         self.request = request.model_copy(deep=True)
+        if policy.direct_tools_only and isinstance(self.request.input, dict):
+            self.request.input = [self.request.input]
         self._policy = policy
         self._identities: dict[tuple[str | None, str], ResponsesToolIdentity] = {}
         self._wire_names: dict[ResponsesToolIdentity, str] = {}
@@ -67,6 +75,9 @@ class ResponsesToolAdapter:
         self._namespace_headers: dict[tuple[str | None, str], JsonObject] = {}
         self._edits: list[_DefinitionEdit] = []
         self._search_name: str | None = None
+        self._declares_client_search = policy.client_tool_search and any(
+            is_client_search(tool) for tool in request.tools or ()
+        )
         self._search_history = (
             resolve_client_search_history(self.request.input)
             if policy.client_tool_search
@@ -91,11 +102,15 @@ class ResponsesToolAdapter:
             )
         if policy == ResponsesToolPolicy():
             return
-        client_search = policy.client_tool_search and (
+        client_search = self._declares_client_search or bool(
             self._search_history.client_items
-            or any(is_client_search(tool) for tool in request.tools or [])
         )
-        if client_search:
+        if policy.direct_tools_only:
+            self.request = self.request.select_direct_tools(
+                self._search_history if policy.client_tool_search else None,
+                supports_strict=policy.supports_strict,
+            )
+        elif client_search:
             self.request.tools = active_client_tools(
                 self.request.tools, self._search_history
             )
@@ -106,14 +121,23 @@ class ResponsesToolAdapter:
         ):
             self._register_tools(self.request.tools)
             if isinstance(self.request.input, list):
+                expected_results: dict[str, str] = {}
                 for index, item in retained_input:
-                    if isinstance(item, dict) and item.get("type") in (
+                    if not isinstance(item, dict):
+                        continue
+                    if policy.direct_tools_only:
+                        _check_original_call_pair(
+                            item,
+                            expected_results,
+                            client_search=index in self._search_history.client_items,
+                        )
+                    if item.get("type") in (
                         "function_call",
                         "custom_tool_call",
                     ):
-                        self._wire_name(_call_identity(item))
+                        self._register_name(_call_identity(item))
                     elif (
-                        isinstance(item, dict)
+                        not policy.direct_tools_only
                         and item.get("type") == "tool_search_output"
                     ):
                         self._register_tools(
@@ -136,15 +160,10 @@ class ResponsesToolAdapter:
         ):
             self.request.tool_choice = self._choice(self.request.tool_choice)
 
-    def _wire_name(self, identity: ResponsesToolIdentity) -> str:
+    def _register_name(self, identity: ResponsesToolIdentity) -> str:
         if identity in self._wire_names:
             return self._wire_names[identity]
-        wire_name = (
-            flatten_responses_tool_name(identity.name, namespace=identity.namespace)
-            if self._policy.flatten_namespaces
-            or (identity.kind == "custom" and self._policy.custom_tools_as_functions)
-            else identity.name
-        )
+        wire_name = self._wire_name(identity)
         key = (
             None if self._policy.flatten_namespaces else identity.namespace,
             wire_name,
@@ -155,6 +174,15 @@ class ResponsesToolAdapter:
         self._identities[key] = identity
         self._wire_names[identity] = wire_name
         return wire_name
+
+    def _wire_name(self, identity: ResponsesToolIdentity) -> str:
+        if self._policy.flatten_namespaces or (
+            identity.kind == "custom" and self._policy.custom_tools_as_functions
+        ):
+            return flatten_responses_tool_name(
+                identity.name, namespace=identity.namespace
+            )
+        return identity.name
 
     def _register_tools(self, tools: JsonValue, namespace: str | None = None) -> None:
         if not isinstance(tools, list):
@@ -167,8 +195,8 @@ class ResponsesToolAdapter:
                     raise ResponsesConversionError("Namespace tools must be a list.")
                 self._register_tools(tool.get("tools"), _name(tool))
             elif tool.get("type") in ("function", "custom"):
-                identity = _definition_identity(tool, namespace)
-                self._wire_name(identity)
+                identity = definition_identity(tool, namespace)
+                self._register_name(identity)
                 self._declared.add(identity)
 
     def _tools(
@@ -234,7 +262,8 @@ class ResponsesToolAdapter:
         ) and kind in {"custom", "function"}:
             nested = tool.get(str(kind))
             source = nested if isinstance(nested, dict) else tool
-            identity = _definition_identity(tool, namespace)
+            identity = definition_identity(tool, namespace)
+            # A past search describes tools even when they are no longer callable.
             wire_name = self._wire_name(identity)
             tool = {
                 **{key: child for key, child in tool.items() if key != kind},
@@ -256,6 +285,11 @@ class ResponsesToolAdapter:
                 tool.pop("format", None)
                 if description := custom_tool_description(source):
                     tool["description"] = description
+            if self._policy.flatten_namespaces and namespace is not None:
+                header = self._namespace_headers[(scope, namespace)]
+                include_namespace_description(
+                    tool, namespace, header.get("description")
+                )
         if self._policy.flatten_namespaces:
             tool.pop("namespace", None)
         if self._policy.explicit_search_parameters:
@@ -303,10 +337,15 @@ class ResponsesToolAdapter:
                 }
             if kind == "tool_search_output":
                 active = self._search_history.output_tools[index]
+                output = self._tools(active, scope=_scope(item))
                 return {
                     **common,
                     "type": "function_call_output",
-                    "output": json.dumps(self._tools(active, scope=_scope(item))),
+                    "output": json.dumps(
+                        public_search_tools(output)
+                        if self._policy.direct_tools_only
+                        else output
+                    ),
                 }
         if kind == "tool_search_output":
             return {
@@ -321,12 +360,17 @@ class ResponsesToolAdapter:
         if kind in {"custom_tool_call", "function_call"}:
             wire_name = self._wire_name(_call_identity(item))
             if kind == "custom_tool_call":
+                text = (
+                    required_custom_tool_input(item.get("input"))
+                    if self._policy.direct_tools_only
+                    else custom_tool_input_text(item.get("input"))
+                )
                 call: JsonObject = {
                     **{key: value for key, value in item.items() if key != "input"},
                     "type": "function_call",
                     "name": wire_name,
                     "arguments": json.dumps(
-                        {"input": custom_tool_input_text(item.get("input"))},
+                        {"input": text},
                         ensure_ascii=False,
                     ),
                 }
@@ -350,12 +394,16 @@ class ResponsesToolAdapter:
             and choice.get("type") == "tool_search"
             and choice.get("execution") != "server"
         ):
+            if self._policy.direct_tools_only and not self._declares_client_search:
+                raise ResponsesConversionError(
+                    "Named tool choice requires an available search tool"
+                )
             return {"type": "function", "name": self._search_name}
         kind = choice.get("type")
         if (
             self._policy.flatten_namespaces and kind in ("function", "custom", "tool")
         ) or (self._policy.custom_tools_as_functions and kind == "custom"):
-            identity = _definition_identity(choice)
+            identity = definition_identity(choice)
             if kind == "tool":
                 identity = next(
                     (
@@ -366,6 +414,10 @@ class ResponsesToolAdapter:
                     ),
                     identity,
                 )
+            if self._policy.direct_tools_only and identity not in self._declared:
+                raise ResponsesConversionError(
+                    "Named tool choice requires an available function"
+                )
             result: JsonObject = {
                 **{
                     key: value
@@ -373,7 +425,7 @@ class ResponsesToolAdapter:
                     if key not in ("custom", "function")
                 },
                 "type": "function",
-                "name": self._wire_name(identity),
+                "name": self._register_name(identity),
             }
             if self._policy.flatten_namespaces:
                 result.pop("namespace", None)
@@ -415,6 +467,23 @@ class ResponsesToolAdapter:
         if len(candidates) > 1 and self._policy.flatten_namespaces:
             raise ResponsesConversionError("Ambiguous tool name returned by provider.")
         return next(iter(candidates)) if len(candidates) == 1 else None
+
+    def canonical_function_name(self, name: str) -> str:
+        """Restore the name of a new call using its current declaration."""
+        if name == self._search_name and not self._declares_client_search:
+            raise ResponsesConversionError(
+                "A past search cannot authorize a new tool search"
+            )
+        identity = self._identity({"name": name})
+        if identity is None:
+            return name
+        if identity not in self._declared and (
+            identity.kind == "custom" or identity.namespace is not None
+        ):
+            raise ResponsesConversionError(
+                "A past tool cannot authorize a new custom or namespaced call"
+            )
+        return self._wire_name(identity)
 
     def restore_item(self, value: JsonValue) -> JsonValue:
         if not isinstance(value, dict):
@@ -720,19 +789,27 @@ def _name(value: Mapping[str, JsonValue]) -> str:
     return required_str(value.get("name"), "tool.name")
 
 
-def _definition_identity(
-    value: Mapping[str, JsonValue], namespace: str | None = None
-) -> ResponsesToolIdentity:
-    kind = "custom" if value.get("type") == "custom" else "function"
-    nested = value.get(kind)
-    if value.get("type") == "tool" and isinstance(value.get("custom"), dict):
-        nested = value["custom"]
-    source = nested if isinstance(nested, dict) else value
-    return ResponsesToolIdentity(
-        kind=kind,
-        name=_name(source),
-        namespace=namespace or _namespace(source) or _namespace(value),
-    )
+def _check_original_call_pair(
+    item: JsonObject, expected: dict[str, str], *, client_search: bool
+) -> None:
+    """Check source kinds before several kinds become the same function on the wire."""
+    kind = item.get("type")
+    if kind in ("function_call", "custom_tool_call") or (
+        client_search and kind == "tool_search_call"
+    ):
+        call_id = required_str(item.get("call_id"), "tool.call_id")
+        if call_id in expected:
+            raise ResponsesConversionError("Duplicate outstanding tool call ID")
+        expected[call_id] = "tool_search_output" if client_search else f"{kind}_output"
+    elif kind in ("function_call_output", "custom_tool_call_output") or (
+        client_search and kind == "tool_search_output"
+    ):
+        call_id = required_str(item.get("call_id"), "tool output.call_id")
+        original = expected.pop(call_id, None)
+        if original is not None and original != kind:
+            raise ResponsesConversionError(
+                "Tool result type does not match its original tool call"
+            )
 
 
 def _call_identity(item: Mapping[str, JsonValue]) -> ResponsesToolIdentity:

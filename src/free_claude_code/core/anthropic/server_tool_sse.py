@@ -228,7 +228,20 @@ def _completion_usage(
         usage = _integer_usage(provider_usage)
         usage.setdefault("input_tokens", input_tokens)
         usage.setdefault("output_tokens", max(1, len(summary) // 4))
-    usage["server_tool_use"] = {usage_key: request_count}
+    prior = (
+        provider_usage.get("server_tool_use") if provider_usage is not None else None
+    )
+    counts = (
+        {
+            key: count
+            for key, count in prior.items()
+            if isinstance(count, int) and not isinstance(count, bool)
+        }
+        if isinstance(prior, dict)
+        else {}
+    )
+    counts[usage_key] = counts.get(usage_key, 0) + request_count
+    usage["server_tool_use"] = counts
     return usage
 
 

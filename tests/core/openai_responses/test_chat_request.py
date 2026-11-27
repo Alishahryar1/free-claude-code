@@ -378,7 +378,7 @@ def test_build_responses_chat_request_relocates_rich_function_output() -> None:
                     "output": [
                         {"type": "input_text", "text": "before"},
                         {"type": "input_image", "image_url": image_url},
-                        {"type": "input_file", "file_id": "file_1"},
+                        {"type": "future_optional_part"},
                         {"type": "input_text", "text": "after"},
                     ],
                 },
@@ -398,19 +398,15 @@ def test_build_responses_chat_request_relocates_rich_function_output() -> None:
     assert messages[1] == {
         "role": "tool",
         "tool_call_id": "call_image",
-        "content": "[Image-bearing tool output follows in user content.]",
+        "content": "[Tool output attachments follow in user content.]",
     }
     assert messages[3]["content"] == [
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_image":',
+            "text": 'Attachments from tool call "call_image":',
         },
         {"type": "text", "text": "before"},
         {"type": "image_url", "image_url": {"url": image_url}},
-        {
-            "type": "text",
-            "text": '{"type":"input_file","file_id":"file_1"}',
-        },
         {"type": "text", "text": "after"},
     ]
     assert image_url not in messages[1]["content"]
@@ -475,7 +471,7 @@ def test_build_responses_chat_request_closes_parallel_tools_before_rich_outputs(
     assert messages[4]["content"] == [
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_a":',
+            "text": 'Attachments from tool call "call_a":',
         },
         {
             "type": "image_url",
@@ -483,7 +479,7 @@ def test_build_responses_chat_request_closes_parallel_tools_before_rich_outputs(
         },
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_b":',
+            "text": 'Attachments from tool call "call_b":',
         },
         {
             "type": "image_url",
@@ -520,9 +516,7 @@ def test_build_responses_chat_request_flushes_rich_output_before_later_input() -
 
     messages = translated.body["messages"]
     assert isinstance(messages, list)
-    assert messages[-2]["content"][0]["text"].startswith(
-        "Image-bearing output for tool call"
-    )
+    assert messages[-2]["content"][0]["text"].startswith("Attachments from tool call")
     assert messages[-1] == {"role": "user", "content": "Describe the image."}
 
 
@@ -537,7 +531,7 @@ def test_build_responses_chat_request_relocates_computer_screenshot() -> None:
                         "type": "computer_screenshot",
                         "image_url": "https://images.example.test/screen.png",
                     },
-                    "acknowledged_safety_checks": [{"id": "check_1"}],
+                    "acknowledged_safety_checks": [],
                 }
             ]
         ),
@@ -614,9 +608,7 @@ def test_build_responses_chat_request_rejects_unportable_computer_screenshot(
         )
 
 
-def test_build_responses_chat_request_skips_unsupported_optional_items_and_choice() -> (
-    None
-):
+def test_build_responses_chat_request_skips_unsupported_optional_items() -> None:
     translated = build_responses_chat_request(
         _request(
             input=[
@@ -624,7 +616,6 @@ def test_build_responses_chat_request_skips_unsupported_optional_items_and_choic
                 {"role": "user", "content": "Hello"},
             ],
             tools=[{"type": "web_search_preview"}],
-            tool_choice={"type": "web_search_preview"},
         ),
         reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
@@ -633,6 +624,18 @@ def test_build_responses_chat_request_skips_unsupported_optional_items_and_choic
         "model": "provider/model",
         "messages": [{"role": "user", "content": "Hello"}],
     }
+
+
+def test_unavailable_forced_tool_is_rejected() -> None:
+    with pytest.raises(ResponsesConversionError):
+        build_responses_chat_request(
+            _request(
+                input="hello",
+                tools=[{"type": "web_search_preview"}],
+                tool_choice={"type": "web_search_preview"},
+            ),
+            reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
+        )
 
 
 def test_build_responses_chat_request_rejects_no_usable_input() -> None:

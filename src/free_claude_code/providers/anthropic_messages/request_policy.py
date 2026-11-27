@@ -62,8 +62,6 @@ def resolve_messages_options(
         limit = min(limit, capabilities.max_output_tokens)
     native_mode = thinking.type if thinking is not None else None
     if thinking is not None:
-        if thinking.model_extra:
-            raise NativeMessagesError("Unsupported native thinking option.")
         if native_mode not in {None, "enabled", "disabled", "adaptive"}:
             raise NativeMessagesError(
                 f"Unsupported Messages thinking type: {native_mode!r}"

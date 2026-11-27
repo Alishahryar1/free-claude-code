@@ -7,36 +7,47 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from ..anthropic.image_sources import portable_anthropic_image_url
-from ..json_types import JsonObject
+from ..json_types import JsonObject, JsonValue
 from ..reasoning import ReasoningEffort, ReasoningPolicy
 
 
 class GeminiModel(BaseModel):
     model_config = ConfigDict(
-        extra="forbid",
+        extra="allow",
         populate_by_name=True,
         alias_generator=to_camel,
         strict=True,
         allow_inf_nan=False,
     )
 
+    def has_extension(self) -> bool:
+        extras: Mapping[str, JsonValue] = self.model_extra or {}
+        return any(value is not None for value in extras.values())
+
     @model_validator(mode="before")
     @classmethod
     def protocol_fields(cls, value: object) -> object:
         if not isinstance(value, Mapping):
             return value
+        declared = set(cls.model_fields)
         for name, field in cls.model_fields.items():
             alias = field.alias or name
+            declared.add(alias)
             if alias != name and name in value and alias in value:
                 raise ValueError(f"Duplicate protocol field: {alias}")
         # ProtoJSON null means absent for protocol fields. Arbitrary JSON objects
         # are not GeminiModel instances and retain their nulls and original keys.
-        return {key: item for key, item in value.items() if item is not None}
+        return {
+            key: item
+            for key, item in value.items()
+            if item is not None or key not in declared
+        }
 
 
 class InlineData(GeminiModel):
     mime_type: Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
     data: str = Field(min_length=1)
+    display_name: str | None = None
 
     @model_validator(mode="after")
     def valid_image(self) -> Self:
@@ -56,8 +67,25 @@ class FunctionCall(GeminiModel):
     args: JsonObject = Field(default_factory=dict)
 
 
-class FunctionResponsePart(GeminiModel):
-    inline_data: InlineData
+class MediaPart(GeminiModel):
+    inline_data: InlineData | None = None
+    file_data: JsonObject | None = None
+
+
+class FunctionResponsePart(MediaPart):
+    @model_validator(mode="after")
+    def has_media(self) -> Self:
+        if self.inline_data is not None and self.file_data is not None:
+            raise ValueError(
+                "A function response part must have exactly one media source"
+            )
+        if (
+            self.inline_data is None
+            and self.file_data is None
+            and not self.has_extension()
+        ):
+            raise ValueError("A function response part requires media")
+        return self
 
 
 class FunctionResponse(GeminiModel):
@@ -67,26 +95,40 @@ class FunctionResponse(GeminiModel):
     parts: list[FunctionResponsePart] = Field(default_factory=list)
 
 
-class Part(GeminiModel):
+class Part(MediaPart):
     text: str | None = None
-    inline_data: InlineData | None = None
+    executable_code: JsonObject | None = None
+    code_execution_result: JsonObject | None = None
+    tool_call: JsonObject | None = None
+    tool_response: JsonObject | None = None
     function_call: FunctionCall | None = None
     function_response: FunctionResponse | None = None
     thought: bool = False
     thought_signature: str | None = Field(default=None, min_length=1)
 
-    @model_validator(mode="after")
-    def one_content_variant(self) -> Self:
-        count = sum(
+    @property
+    def data_variant_count(self) -> int:
+        return sum(
             value is not None
             for value in (
                 self.text,
                 self.inline_data,
+                self.file_data,
+                self.executable_code,
+                self.code_execution_result,
+                self.tool_call,
+                self.tool_response,
                 self.function_call,
                 self.function_response,
             )
         )
-        if count > 1 or (count == 0 and self.thought_signature is None):
+
+    @model_validator(mode="after")
+    def one_content_variant(self) -> Self:
+        count = self.data_variant_count
+        if count > 1 or (
+            count == 0 and self.thought_signature is None and not self.has_extension()
+        ):
             raise ValueError("A part requires one data variant or a thoughtSignature")
         if self.thought and self.text is None and self.thought_signature is None:
             raise ValueError("A thought part requires text or a signature")
@@ -96,6 +138,16 @@ class Part(GeminiModel):
 class Content(GeminiModel):
     role: Literal["user", "model"] | None = None
     parts: list[Part] = Field(min_length=1)
+
+    @property
+    def effective_role(self) -> Literal["model", "user"]:
+        if self.role is not None:
+            return self.role
+        return (
+            "model"
+            if any(part.function_call is not None for part in self.parts)
+            else "user"
+        )
 
 
 class FunctionDeclaration(GeminiModel):
@@ -114,12 +166,25 @@ class FunctionDeclaration(GeminiModel):
 
 
 class Tool(GeminiModel):
-    function_declarations: list[FunctionDeclaration] = Field(min_length=1)
+    function_declarations: list[FunctionDeclaration] = Field(
+        default_factory=list, min_length=1
+    )
+
+    @model_validator(mode="after")
+    def has_declaration(self) -> Self:
+        if not self.function_declarations and not self.has_extension():
+            raise ValueError("A tool requires a declaration")
+        return self
 
 
 class FunctionCallingConfig(GeminiModel):
     mode: Literal["MODE_UNSPECIFIED", "AUTO", "ANY", "NONE"] = "AUTO"
     allowed_function_names: list[str] = Field(default_factory=list)
+
+    def permits(self, name: str) -> bool:
+        return self.mode != "NONE" and (
+            not self.allowed_function_names or name in self.allowed_function_names
+        )
 
     @model_validator(mode="after")
     def allowed_mode(self) -> Self:
@@ -170,7 +235,13 @@ class TextResponseFormat(GeminiModel):
 
 
 class ResponseFormat(GeminiModel):
-    text: TextResponseFormat
+    text: TextResponseFormat | None = None
+
+    @model_validator(mode="after")
+    def has_format(self) -> Self:
+        if self.text is None and not self.has_extension():
+            raise ValueError("responseFormat requires a format")
+        return self
 
 
 class GenerationConfig(GeminiModel):
@@ -211,7 +282,11 @@ class GenerationConfig(GeminiModel):
             raise ValueError("An output schema requires application/json")
         if self.response_format is not None:
             text = self.response_format.text
-            if text.schema_ is not None and text.mime_type != "APPLICATION_JSON":
+            if (
+                text is not None
+                and text.schema_ is not None
+                and text.mime_type != "APPLICATION_JSON"
+            ):
                 raise ValueError("An output schema requires APPLICATION_JSON")
         return self
 
@@ -219,6 +294,7 @@ class GenerationConfig(GeminiModel):
     def structured(self) -> bool:
         return self.response_mime_type == "application/json" or (
             self.response_format is not None
+            and self.response_format.text is not None
             and self.response_format.text.mime_type == "APPLICATION_JSON"
         )
 
@@ -226,6 +302,9 @@ class GenerationConfig(GeminiModel):
 class GeminiRequest(GeminiModel):
     # Supplied by routing, never taken from the HTTP request body.
     model: str = Field(min_length=1)
+    cached_content: str | None = Field(default=None, min_length=1)
+    continuation_token: str | None = Field(default=None, min_length=1)
+    safety_settings: list[JsonObject] | None = None
     contents: list[Content] = Field(min_length=1)
     system_instruction: Content | None = None
     tools: list[Tool] = Field(default_factory=list)
@@ -237,7 +316,9 @@ class GeminiRequest(GeminiModel):
         if not self.model.strip():
             raise ValueError("Model must not be blank")
         if self.system_instruction is not None and any(
-            part.text is None or part.thought or part.thought_signature is not None
+            (part.text is None and part.data_variant_count)
+            or part.thought
+            or part.thought_signature is not None
             for part in self.system_instruction.parts
         ):
             raise ValueError("systemInstruction supports ordinary text only")
@@ -249,8 +330,10 @@ class GeminiRequest(GeminiModel):
         if len(set(names)) != len(names):
             raise ValueError("Function declaration names must be unique")
         config = self.tool_config.function_calling_config
-        if any(name not in names for name in config.allowed_function_names):
-            raise ValueError("allowedFunctionNames must name declared functions")
+        if config.allowed_function_names and not set(names).intersection(
+            config.allowed_function_names
+        ):
+            raise ValueError("allowedFunctionNames must include a declared function")
         if config.mode == "ANY" and not names:
             raise ValueError("ANY function calling requires declared functions")
         return self

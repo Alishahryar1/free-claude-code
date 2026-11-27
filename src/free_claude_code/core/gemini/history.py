@@ -24,6 +24,28 @@ def normalized_history(request: GeminiRequest) -> tuple[GeminiTurn, ...]:
         parts: list[Part] = []
         replay = []
         for part_index, part in enumerate(original.parts):
+            if any(
+                value is not None
+                for value in (
+                    part.executable_code,
+                    part.code_execution_result,
+                    part.tool_call,
+                    part.tool_response,
+                )
+            ):
+                raise GeminiConversionError(
+                    "Gemini server tool history requires native Gemini egress"
+                )
+            response = part.function_response
+            if part.file_data is not None or (
+                response is not None
+                and any(
+                    attachment.file_data is not None for attachment in response.parts
+                )
+            ):
+                raise GeminiConversionError(
+                    "Gemini file references require native Gemini egress"
+                )
             if part.thought_signature is not None:
                 record = decode_gemini_replay(part.thought_signature)
                 bundle = (
@@ -45,8 +67,21 @@ def normalized_history(request: GeminiRequest) -> tuple[GeminiTurn, ...]:
                 if previous is None:
                     bundles[bundle.response_id] = bundle
                     replay.append(bundle)
-            call, response = part.function_call, part.function_response
+            call = part.function_call
             if call is not None:
+                fields = call.model_extra or {}
+                if any(
+                    fields.get(key)
+                    for key in (
+                        "partialArgs",
+                        "willContinue",
+                        "partial_args",
+                        "will_continue",
+                    )
+                ):
+                    raise GeminiConversionError(
+                        "Cannot translate a partial Gemini functionCall"
+                    )
                 call_id = call.id or f"call_gemini_{index}_{part_index}"
                 if call_id in seen:
                     raise GeminiConversionError("Duplicate functionCall id")
@@ -56,6 +91,11 @@ def normalized_history(request: GeminiRequest) -> tuple[GeminiTurn, ...]:
                     update={"function_call": call.model_copy(update={"id": call_id})}
                 )
             elif response is not None:
+                fields = response.model_extra or {}
+                if fields.get("willContinue") or fields.get("will_continue"):
+                    raise GeminiConversionError(
+                        "Cannot translate a partial Gemini functionResponse"
+                    )
                 matches = [
                     call_id
                     for call_id, name in pending.items()

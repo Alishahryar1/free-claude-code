@@ -3,7 +3,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import cast
+from typing import assert_never, cast
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.history_replay import (
@@ -11,20 +11,31 @@ from free_claude_code.core.history_replay import (
     is_replay,
     readable_reasoning,
     reasoning_detail,
-    tool_history_context,
     unprotected_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.openai_chat import (
-    IMAGE_TOOL_RESULT_MARKER,
-    ChatToolResultImages,
+    TOOL_RESULT_ATTACHMENT_MARKER,
+    ChatToolResultAttachments,
     close_chat_tool_result_turns,
-    computer_screenshot_label,
-    image_tool_result_label,
+    inline_file_fields,
+    openai_cache_breakpoint,
+    shared_openai_request_options,
+    tool_result_attachment_label,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 from .errors import ResponsesConversionError
+from .input_history import (
+    HistoryItem,
+    InputCall,
+    InputMessage,
+    InputResult,
+    ReasoningItem,
+    Screenshot,
+    input_items,
+    read_history,
+)
 from .models import OpenAIResponsesRequest
 from .reasoning import (
     combine_reasoning,
@@ -32,7 +43,6 @@ from .reasoning import (
 )
 from .tool_adaptation import ResponsesToolAdapter, ResponsesToolPolicy
 from .tools import (
-    call_id_from_item,
     optional_str,
     required_str,
 )
@@ -92,62 +102,24 @@ class _ResponsesChatInputBuilder:
         self._pending_rich_output_parts: list[dict[str, object]] = []
         self._discovery_outputs: list[dict[str, object]] = []
 
-    def add(self, item: JsonValue, *, source_type: str | None = None) -> None:
-        if isinstance(item, str):
+    def add(self, item: HistoryItem, *, source_type: str | None) -> None:
+        if not isinstance(item, (InputResult, Screenshot)):
             self._flush_rich_outputs()
-            self._flush_reasoning()
-            self.messages.append({"role": "user", "content": item})
-            return
-        if not isinstance(item, Mapping):
-            self._flush_rich_outputs()
-            return
-
-        item_type = item.get("type")
-        if item_type not in {
-            "function_call_output",
-            "custom_tool_call_output",
-            "computer_call_output",
-        }:
-            self._flush_rich_outputs()
-        if item_type in (None, "message") or "role" in item:
+        if isinstance(item, InputMessage):
             self._add_message(item)
-            return
-        if item_type == "reasoning":
-            self._pending_reasoning.add(item)
-            return
-        if item_type == "function_call":
+        elif isinstance(item, ReasoningItem):
+            self._pending_reasoning.add(item.data)
+        elif isinstance(item, InputCall):
             self._add_tool_call(item)
-            return
-        if item_type == "function_call_output":
+        elif isinstance(item, InputResult):
             self._add_tool_output(item, source_type=source_type)
-            return
-        if item_type == "computer_call_output":
-            self._add_computer_output(item)
-            return
-        if item_type in {"input_text", "output_text", "text"}:
+        elif isinstance(item, Screenshot):
             self._flush_reasoning()
-            self.messages.append({"role": "user", "content": _text_from_part(item)})
-            return
-        if item_type == "input_image":
-            image = _image_part(item, context="input_image")
-            self._flush_reasoning()
-            self.messages.append({"role": "user", "content": [image]})
-            return
-        if isinstance(item_type, str) and item_type.endswith(("_call", "_result")):
-            if item.get("status") not in {
-                None,
-                "completed",
-                "failed",
-                "incomplete",
-                "interrupted",
-            }:
-                raise ResponsesConversionError(
-                    "An active hosted tool cannot continue through Chat Completions."
-                )
-            self._flush_reasoning()
-            self.messages.append(
-                {"role": "assistant", "content": tool_history_context(item)}
-            )
+            content = _message_content(item.content)
+            assert isinstance(content, list)
+            self._pending_rich_output_parts.extend(content)
+        else:
+            assert_never(item)
 
     def finish(self) -> tuple[list[str], list[dict[str, object]]]:
         self._flush_rich_outputs()
@@ -169,21 +141,26 @@ class _ResponsesChatInputBuilder:
                 tool["name"] = tool_names.encode(name)
             message["content"] = json.dumps(tools)
 
-    def _add_message(self, item: Mapping[str, JsonValue]) -> None:
-        role = required_str(item.get("role", "user"), "input.role")
+    def _add_message(self, item: InputMessage) -> None:
+        role = item.role
+        if role != "user":
+            item.require_text_only("Chat")
+        content = _message_content(item.content)
         if role in {"developer", "system"}:
-            text = _content_text(item.get("content"))
-            if text:
-                self.system_parts.append(text)
+            if content:
+                if (
+                    isinstance(content, list)
+                    or self.messages
+                    or not self._pending_reasoning.empty
+                ):
+                    self._flush_reasoning()
+                    self.messages.append({"role": role, "content": content})
+                else:
+                    self.system_parts.append(content)
             return
-        if role not in {"user", "assistant"}:
-            raise ResponsesConversionError(
-                f"Unsupported Responses message role: {role!r}"
-            )
 
         if role == "user":
             self._flush_reasoning()
-        content = _message_content(item.get("content"), allow_images=role == "user")
         message: dict[str, object] = {"role": role, "content": content}
         if role == "assistant":
             self._apply_pending_reasoning(message)
@@ -191,11 +168,10 @@ class _ResponsesChatInputBuilder:
             return
         self.messages.append(message)
 
-    def _add_tool_call(self, item: Mapping[str, JsonValue]) -> None:
-        call_id = call_id_from_item(item)
-        name = required_str(item.get("name"), "function_call.name")
-        raw_arguments = item.get("arguments")
-        arguments = _arguments_text(raw_arguments)
+    def _add_tool_call(self, item: InputCall) -> None:
+        call_id = item.call_id
+        name = item.identity.name
+        arguments = _arguments_text(item.arguments)
 
         message: dict[str, object] | None = self._last_tool_call_message()
         if message is None:
@@ -216,27 +192,22 @@ class _ResponsesChatInputBuilder:
             }
         )
 
-    def _add_tool_output(
-        self, item: Mapping[str, JsonValue], *, source_type: str | None
-    ) -> None:
-        function = source_type != "custom_tool_call_output"
-        call_id = call_id_from_item(item)
+    def _add_tool_output(self, item: InputResult, *, source_type: str | None) -> None:
+        call_id = item.call_id
         if not self._pending_reasoning.empty:
             previous = self._last_tool_call_message()
             if previous is not None:
                 self._apply_pending_reasoning(previous)
             else:
                 self._flush_reasoning()
-        output = item.get("output")
-        rich_parts = (
-            _rich_function_output_parts(output, call_id=call_id) if function else None
-        )
+        output = item.output
+        rich_parts = _rich_tool_output_parts(output, call_id=call_id)
         self.messages.append(
             {
                 "role": "tool",
                 "tool_call_id": call_id,
                 "content": (
-                    IMAGE_TOOL_RESULT_MARKER
+                    TOOL_RESULT_ATTACHMENT_MARKER
                     if rich_parts is not None
                     else _tool_output_text(output)
                 ),
@@ -246,24 +217,6 @@ class _ResponsesChatInputBuilder:
             self._discovery_outputs.append(self.messages[-1])
         if rich_parts is not None:
             self._pending_rich_output_parts.extend(rich_parts)
-
-    def _add_computer_output(self, item: Mapping[str, JsonValue]) -> None:
-        call_id = call_id_from_item(item)
-        output = item.get("output")
-        if not isinstance(output, Mapping) or output.get("type") != (
-            "computer_screenshot"
-        ):
-            raise ResponsesConversionError(
-                "computer_call_output.output must be a computer_screenshot object"
-            )
-        image = _image_part(output, context="computer_call_output.output")
-        self._flush_reasoning()
-        self._pending_rich_output_parts.extend(
-            [
-                {"type": "text", "text": computer_screenshot_label(call_id)},
-                image,
-            ]
-        )
 
     def _last_tool_call_message(self) -> dict[str, object] | None:
         if not self.messages:
@@ -292,7 +245,7 @@ class _ResponsesChatInputBuilder:
         self.messages.append(
             cast(
                 dict[str, object],
-                ChatToolResultImages(
+                ChatToolResultAttachments(
                     role="user",
                     content=cast(
                         list[JsonValue], list(self._pending_rich_output_parts)
@@ -358,9 +311,16 @@ class _ResponsesChatInputBuilder:
             if encrypted and not signed:
                 details.extend(reasoning_detail(encrypted))
         if contexts:
-            message["content"] = "\n\n".join(
-                [*contexts, str(message.get("content") or "")]
-            ).rstrip()
+            content = message.get("content")
+            if isinstance(content, list):
+                message["content"] = [
+                    {"type": "text", "text": "\n\n".join(contexts)},
+                    *content,
+                ]
+            else:
+                message["content"] = "\n\n".join(
+                    [*contexts, str(content or "")]
+                ).rstrip()
         if details:
             existing = message.setdefault("reasoning_details", [])
             if isinstance(existing, list):
@@ -374,12 +334,14 @@ def build_responses_chat_request(
     structured_reasoning_details: bool = False,
 ) -> ResponsesChatRequest:
     """Translate a Responses request directly into one Chat Completions body."""
+    request.require_translatable_request()
     adapter = ResponsesToolAdapter(
         request,
         ResponsesToolPolicy(
             custom_tools_as_functions=True,
             flatten_namespaces=True,
             client_tool_search=True,
+            direct_tools_only=True,
         ),
     )
     request = adapter.request
@@ -389,17 +351,13 @@ def build_responses_chat_request(
     )
     if request.instructions:
         builder.system_parts.append(request.instructions)
-    original_items = _input_items(adapter.original.input)
-    for source_index, item in zip(
-        adapter.input_source_indices, _input_items(request.input), strict=True
-    ):
-        source = original_items[source_index]
-        builder.add(
-            item,
-            source_type=optional_str(source.get("type"))
-            if isinstance(source, dict)
-            else None,
+    originals = input_items(adapter.original.input)
+    for index, item in read_history(request.input):
+        original = originals[adapter.input_source_indices[index]]
+        source_type = (
+            optional_str(original.get("type")) if isinstance(original, dict) else None
         )
+        builder.add(item, source_type=source_type)
     system_parts, raw_messages = builder.finish()
     messages = cast(
         list[dict[str, object]],
@@ -418,13 +376,17 @@ def build_responses_chat_request(
         )
 
     tools, available_tool_names = _chat_tools(request.tools)
+    choice = _chat_tool_choice(request.tool_choice, available_tool_names)
     if request.tool_choice != "none" and tools:
         body["tools"] = tools
-        choice = _chat_tool_choice(request.tool_choice, available_tool_names)
         if choice is not None:
             body["tool_choice"] = choice
 
-    if request.parallel_tool_calls is not None and tools:
+    if (
+        request.parallel_tool_calls is not None
+        and tools
+        and request.tool_choice != "none"
+    ):
         body["parallel_tool_calls"] = request.parallel_tool_calls
     if request.max_output_tokens is not None:
         body["max_tokens"] = request.max_output_tokens
@@ -436,6 +398,7 @@ def build_responses_chat_request(
         body["metadata"] = request.metadata
 
     extra: JsonObject = request.model_extra or {}
+    body.update(shared_openai_request_options(extra))
     for field_name in _CHAT_OPTION_FIELDS:
         value = extra.get(field_name)
         if value is not None:
@@ -454,22 +417,12 @@ def build_responses_chat_request(
     )
 
 
-def _input_items(value: JsonValue) -> Sequence[JsonValue]:
-    if value is None:
-        return ()
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return value
-    return (value,)
-
-
-def _message_content(
-    value: JsonValue, *, allow_images: bool
-) -> str | list[dict[str, object]]:
+def _message_content(value: JsonValue) -> str | list[dict[str, object]]:
     if isinstance(value, str):
         return value
     if not isinstance(value, Sequence) or isinstance(value, bytes | bytearray):
         if isinstance(value, Mapping):
-            return _text_from_part(value)
+            return _message_content([value])
         return ""
 
     parts: list[dict[str, object]] = []
@@ -480,28 +433,35 @@ def _message_content(
         if not isinstance(part, Mapping):
             continue
         part_type = part.get("type")
-        if part_type in {"input_text", "output_text", "text", "refusal"} or (
-            "text" in part
-        ):
-            parts.append({"type": "text", "text": _text_from_part(part)})
+        if part_type in ("input_text", "output_text", "text", "refusal"):
+            parts.append(
+                {
+                    "type": "text",
+                    "text": _text_from_part(part),
+                    **openai_cache_breakpoint(part),
+                }
+            )
             continue
-        if allow_images and part_type == "input_image":
+        if part_type == "input_image":
             parts.append(_image_part(part, context="input_image"))
+        elif part_type == "input_file":
+            fields = inline_file_fields(part, pdf_only=True)
+            if fields is None or part.get("detail") not in (None, "auto"):
+                raise ResponsesConversionError(
+                    "A Chat file must be an inline PDF with automatic detail in user content"
+                )
+            parts.append(
+                {"type": "file", "file": fields, **openai_cache_breakpoint(part)}
+            )
 
     if not parts:
         return ""
-    if all(part.get("type") == "text" for part in parts):
+    if all(
+        part.get("type") == "text" and "prompt_cache_breakpoint" not in part
+        for part in parts
+    ):
         return "\n\n".join(str(part.get("text", "")) for part in parts)
     return parts
-
-
-def _content_text(value: JsonValue) -> str:
-    content = _message_content(value, allow_images=False)
-    if isinstance(content, str):
-        return content
-    return "\n\n".join(
-        str(part.get("text", "")) for part in content if isinstance(part, Mapping)
-    )
 
 
 def _text_from_part(part: Mapping[str, JsonValue]) -> str:
@@ -535,7 +495,11 @@ def _image_part(part: Mapping[str, JsonValue], *, context: str) -> dict[str, obj
     detail = part.get("detail")
     if isinstance(detail, str):
         image_url["detail"] = detail
-    return {"type": "image_url", "image_url": image_url}
+    return {
+        "type": "image_url",
+        "image_url": image_url,
+        **openai_cache_breakpoint(part),
+    }
 
 
 def _arguments_text(value: JsonValue) -> str:
@@ -544,38 +508,33 @@ def _arguments_text(value: JsonValue) -> str:
     return json.dumps(value if value is not None else {}, separators=(",", ":"))
 
 
-def _tool_output_text(value: JsonValue) -> str:
+def _tool_output_text(value: JsonValue) -> str | list[dict[str, object]]:
     if value is None:
         return ""
     if isinstance(value, str):
         return value
+    if isinstance(value, list) and any(
+        isinstance(part, Mapping) and "prompt_cache_breakpoint" in part
+        for part in value
+    ):
+        return _message_content(value)
     return json.dumps(value, separators=(",", ":"))
 
 
-def _rich_function_output_parts(
+def _rich_tool_output_parts(
     value: JsonValue, *, call_id: str
 ) -> list[dict[str, object]] | None:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return None
     if not any(
-        isinstance(part, Mapping) and part.get("type") == "input_image"
+        isinstance(part, Mapping) and part.get("type") in ("input_image", "input_file")
         for part in value
     ):
         return None
 
-    result: list[dict[str, object]] = [
-        {"type": "text", "text": image_tool_result_label(call_id)}
-    ]
-    for part in value:
-        if isinstance(part, Mapping) and part.get("type") == "input_text":
-            result.append({"type": "text", "text": _text_from_part(part)})
-        elif isinstance(part, Mapping) and part.get("type") == "input_image":
-            result.append(
-                _image_part(part, context="function_call_output.output.input_image")
-            )
-        else:
-            result.append({"type": "text", "text": _tool_output_text(part)})
-    return result
+    parts = _message_content(value)
+    assert isinstance(parts, list)
+    return [{"type": "text", "text": tool_result_attachment_label(call_id)}, *parts]
 
 
 def _apply_reasoning_text(
@@ -641,40 +600,54 @@ def _chat_function_tool(tool: Mapping[str, JsonValue]) -> tuple[dict[str, object
 def _chat_tool_choice(
     value: JsonValue, available_names: frozenset[str]
 ) -> object | None:
-    if not available_names:
-        return None
     if value is None or value == "auto":
-        return "auto"
+        return "auto" if available_names else None
     if value == "required":
+        if not available_names:
+            raise ResponsesConversionError(
+                "Required tool choice has no available functions"
+            )
         return "required"
     if value == "none":
         return None
     if not isinstance(value, Mapping):
-        return None
+        raise ResponsesConversionError("Unsupported tool choice")
     choice_type = value.get("type")
     if choice_type in {"auto", "any", "required"}:
-        return "required" if choice_type in {"any", "required"} else "auto"
+        return _chat_tool_choice(
+            "auto" if choice_type == "auto" else "required", available_names
+        )
     if choice_type != "function":
-        return None
+        raise ResponsesConversionError(
+            "Named tool choice requires an available function"
+        )
     name = optional_str(value.get("name"))
-    if not name:
-        return None
-    if name not in available_names:
-        return None
+    if not name or name not in available_names:
+        raise ResponsesConversionError(
+            "Named tool choice requires an available function"
+        )
     return {"type": "function", "function": {"name": name}}
 
 
-def _chat_response_format(value: JsonValue) -> object | None:
+def _chat_response_format(value: JsonValue) -> JsonObject | None:
+    if value is None:
+        return None
     if not isinstance(value, Mapping):
-        return None
+        raise ResponsesConversionError("Responses text controls require an object")
     format_value = value.get("format")
-    if not isinstance(format_value, Mapping):
+    if format_value is None:
         return None
+    if not isinstance(format_value, Mapping):
+        raise ResponsesConversionError("Output format requires an object")
     format_type = format_value.get("type")
     if format_type in {"text", "json_object"}:
         return {"type": format_type}
     if format_type != "json_schema":
-        return None
+        raise ResponsesConversionError(
+            "Chat cannot enforce the requested output format"
+        )
+    if not isinstance(format_value.get("schema"), dict):
+        raise ResponsesConversionError("Output format requires a JSON schema object")
     json_schema = {
         key: format_value[key]
         for key in ("name", "description", "schema", "strict")

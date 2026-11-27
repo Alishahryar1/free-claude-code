@@ -204,7 +204,6 @@ def test_invalid_auth_is_a_google_error_before_inference(
     [
         {},
         {"contents": []},
-        {**body(), "cachedContent": "caches/foreign"},
         {**body(), "generationConfig": {"candidateCount": 2}},
     ],
 )

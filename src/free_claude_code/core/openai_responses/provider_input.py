@@ -6,28 +6,28 @@ from typing import Any
 from free_claude_code.core.anthropic.content import get_block_attr, get_block_type
 from free_claude_code.core.anthropic.conversion import (
     resolve_anthropic_tool_choice,
-    unrepresentable_client_tool_constraints,
 )
 from free_claude_code.core.anthropic.image_sources import (
     AnthropicImageSourceError,
     portable_anthropic_image_url,
 )
-from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.anthropic.models import MessagesRequest, SystemContent
 from free_claude_code.core.anthropic.request_serialization import (
     is_noop_context_management,
+    openai_output_schema,
     serialize_tool_result_content,
+    translated_messages,
 )
 from free_claude_code.core.anthropic.tool_results import (
     ToolResultImage,
     ToolResultText,
     decompose_tool_result_content,
 )
+from free_claude_code.core.anthropic.web_history import web_history_text
 from free_claude_code.core.history_replay import (
-    HistoryReplayError,
     has_readable_replay,
     is_replay,
     readable_reasoning,
-    tool_history_context,
     unprotected_replay,
     validate_hosted_tool_history,
 )
@@ -49,20 +49,29 @@ def build_responses_provider_request(
     """Build a stateless Responses request without silently dropping fields."""
 
     _validate_supported_request(request)
+    tools = request.direct_client_tools()
     tool_names = OpenAIToolNameCodec.from_request(request)
     instructions = _system_text(request)
     input_items: list[dict[str, Any]] = []
-    for message in request.messages:
-        if message.role == "assistant":
-            input_items.extend(
-                _assistant_items(
-                    message.content,
-                    reasoning_content=message.reasoning_content,
-                    tool_names=tool_names,
+    try:
+        messages = translated_messages(request)
+        output_schema = openai_output_schema(request)
+        tool_choice = resolve_anthropic_tool_choice(tools, request.tool_choice)
+        for message in messages:
+            if message.role == "assistant":
+                input_items.extend(
+                    _assistant_items(
+                        message.content,
+                        reasoning_content=message.reasoning_content,
+                        tool_names=tool_names,
+                    )
                 )
-            )
-        else:
-            input_items.extend(_user_items(message.content))
+            else:
+                input_items.extend(_user_items(message.content))
+    except ResponsesConversionError:
+        raise
+    except ValueError as error:
+        raise ResponsesConversionError(str(error)) from error
 
     if not input_items:
         raise ResponsesConversionError(
@@ -76,6 +85,8 @@ def build_responses_provider_request(
         "store": False,
         "include": ["reasoning.encrypted_content"],
     }
+    if output_schema is not None:
+        body["text"] = {"format": {"type": "json_schema", **output_schema}}
     if instructions:
         body["instructions"] = "\n\n".join(instructions)
     if request.max_tokens is not None:
@@ -86,7 +97,7 @@ def build_responses_provider_request(
         body["top_p"] = request.top_p
     if request.metadata is not None:
         body["metadata"] = request.metadata
-    if request.tools:
+    if tools:
         body["tools"] = [
             {
                 "type": "function",
@@ -95,11 +106,16 @@ def build_responses_provider_request(
                 "parameters": translate_tool_schema_patterns(
                     tool.input_schema or {"type": "object", "properties": {}}
                 ),
-                "strict": False,
+                "strict": (tool.model_extra or {}).get("strict", False),
             }
-            for tool in request.tools
+            for tool in tools
         ]
-    tool_choice = resolve_anthropic_tool_choice(request.tools, request.tool_choice)
+    if (
+        tool_choice
+        and tool_choice.get("disable_parallel_tool_use")
+        and tool_choice.get("type") != "none"
+    ):
+        body["parallel_tool_calls"] = False
     if tool_choice is not None:
         body["tool_choice"] = _tool_choice(tool_choice, tool_names=tool_names)
     if reasoning_config := responses_reasoning_config(reasoning):
@@ -108,43 +124,11 @@ def build_responses_provider_request(
 
 
 def _validate_supported_request(request: MessagesRequest) -> None:
-    if request.model_extra:
-        raise ResponsesConversionError(
-            "OpenAI Responses does not support these request fields: "
-            f"{sorted(request.model_extra)}."
-        )
-    provider_tool_types = sorted(
-        {
-            tool.type
-            for tool in request.tools or ()
-            if tool.type is not None
-            and (tool.type != "custom" or tool.input_schema is None)
-        }
-    )
-    if provider_tool_types:
-        raise ResponsesConversionError(
-            "OpenAI Responses cannot represent provider-managed tool types: "
-            f"{provider_tool_types}."
-        )
-    for tool in request.tools or ():
-        if tool.type == "custom" and (
-            constraints := unrepresentable_client_tool_constraints(tool)
-        ):
-            raise ResponsesConversionError(
-                f"OpenAI Responses cannot enforce {constraints} for tool {tool.name!r}."
-            )
     unsupported: list[str] = []
     if request.stop_sequences:
         unsupported.append("stop_sequences")
-    if request.top_k is not None:
-        unsupported.append("top_k")
     if not is_noop_context_management(request.context_management):
         unsupported.append("context_management")
-    unsupported.extend(_unsupported_output_config_paths(request.output_config))
-    if request.mcp_servers:
-        unsupported.append("mcp_servers")
-    if request.extra_body:
-        unsupported.append("extra_body")
     if unsupported:
         raise ResponsesConversionError(
             "OpenAI Responses cannot represent these fields without data loss: "
@@ -152,20 +136,16 @@ def _validate_supported_request(request: MessagesRequest) -> None:
         )
 
 
-def _unsupported_output_config_paths(
-    output_config: dict[str, Any] | None,
-) -> list[str]:
-    if not output_config:
-        return []
-    return [f"output_config.{key}" for key in sorted(output_config) if key != "effort"]
-
-
 def _system_text(request: MessagesRequest) -> list[str]:
     if request.system is None:
         return []
     if isinstance(request.system, str):
         return [request.system] if request.system else []
-    return [part.text for part in request.system if part.text]
+    return [
+        part.text
+        for part in request.system
+        if isinstance(part, SystemContent) and part.text
+    ]
 
 
 def _assistant_items(
@@ -181,19 +161,16 @@ def _assistant_items(
         raise ResponsesConversionError(
             "Assistant content must be text or content blocks."
         )
-    try:
-        validate_hosted_tool_history(
-            [
-                {
-                    "type": get_block_type(block),
-                    "id": get_block_attr(block, "id", None),
-                    "tool_use_id": get_block_attr(block, "tool_use_id", None),
-                }
-                for block in blocks
-            ]
-        )
-    except HistoryReplayError as error:
-        raise ResponsesConversionError(str(error)) from error
+    validate_hosted_tool_history(
+        [
+            {
+                "type": get_block_type(block),
+                "id": get_block_attr(block, "id"),
+                "tool_use_id": get_block_attr(block, "tool_use_id"),
+            }
+            for block in blocks
+        ]
+    )
     items: list[dict[str, Any]] = []
     text_parts: list[dict[str, Any]] = []
 
@@ -297,14 +274,9 @@ def _assistant_items(
             "web_search_tool_result",
             "web_fetch_tool_result",
         }:
-            native = (
-                block
-                if isinstance(block, dict)
-                else block.model_dump(mode="json", exclude_none=True)
-            )
             items.append(
                 _assistant_message(
-                    [{"type": "output_text", "text": tool_history_context(native)}]
+                    [{"type": "output_text", "text": web_history_text(block)}]
                 )
             )
         else:

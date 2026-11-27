@@ -72,7 +72,6 @@ async def test_provider_failure_preserves_text_and_raises_canonical_value() -> N
     provider = _provider()
     request = make_messages_request(
         "test-model",
-        messages=[],
         max_tokens=32,
     )
     # A source failure preserves emitted text without inventing a successful close.
@@ -112,7 +111,6 @@ async def test_openai_stream_close_failure_cannot_mask_execution_failure() -> No
     provider = _provider()
     request = make_messages_request(
         "test-model",
-        messages=[],
         max_tokens=32,
     )
     stream = _FailingStream(
@@ -252,7 +250,6 @@ async def test_completed_stream_close_failure_preserves_success_lifecycle(
     provider = _provider()
     request = make_messages_request(
         "test-model",
-        messages=[],
         max_tokens=32,
     )
     stream = _FailingStream(
@@ -332,7 +329,6 @@ async def test_closing_public_openai_stream_closes_raw_stream_once() -> None:
     provider = _provider()
     request = make_messages_request(
         "test-model",
-        messages=[],
         max_tokens=32,
     )
     raw_stream = _FailingStream(

@@ -131,6 +131,7 @@ def test_malformed_responses_history_is_rejected_before_native_gemini(
             {
                 "model": "public",
                 "messages": [{"role": "user", "content": "hello"}],
+                "tool_choice": "required",
                 "tools": [
                     {
                         "type": "function",
@@ -149,6 +150,7 @@ def test_malformed_responses_history_is_rejected_before_native_gemini(
                 "model": "public",
                 "stream": True,
                 "input": "hello",
+                "tool_choice": "required",
                 "tools": [
                     {
                         "type": "function",

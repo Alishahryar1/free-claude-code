@@ -33,7 +33,9 @@ ARGUMENTS = [
 ]
 
 
-def tool_events(protocol: str, arguments: str) -> list[JsonObject]:
+def tool_events(
+    protocol: str, arguments: str, *, name: str = "read"
+) -> list[JsonObject]:
     if protocol == "chat":
         template = _events_for("chat")[0]
         deltas = [
@@ -43,7 +45,7 @@ def tool_events(protocol: str, arguments: str) -> list[JsonObject]:
                         "index": 0,
                         "id": "call_probe",
                         "type": "function",
-                        "function": {"name": "read", "arguments": ""},
+                        "function": {"name": name, "arguments": ""},
                     }
                 ]
             }
@@ -73,7 +75,7 @@ def tool_events(protocol: str, arguments: str) -> list[JsonObject]:
                 "content_block": {
                     "type": "tool_use",
                     "id": "call_probe",
-                    "name": "read",
+                    "name": name,
                     "input": {},
                 },
             },
@@ -98,7 +100,7 @@ def tool_events(protocol: str, arguments: str) -> list[JsonObject]:
         "type": "function_call",
         "id": "fc_probe",
         "call_id": "call_probe",
-        "name": "read",
+        "name": name,
         "arguments": arguments,
         "status": "completed",
     }

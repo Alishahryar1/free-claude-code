@@ -340,7 +340,7 @@ class TestBuildRequestBody:
                 },
             )
         )
-        req.tools = tools
+        req.tools = [*tools]
         snapshot = req.model_dump()
 
         body = build_request_body(req, reasoning=REASONING_OFF)

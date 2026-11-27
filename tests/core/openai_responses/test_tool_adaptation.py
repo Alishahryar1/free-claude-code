@@ -694,9 +694,14 @@ def test_chat_and_native_adaptation_share_custom_input_and_description(
     )
     body: JsonObject = _adapter(request).request.model_dump()
     native = object_array(body["tools"])[0]
-    chat_tools = build_responses_chat_request(
+    chat_body = build_responses_chat_request(
         request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
-    ).body["tools"]
+    ).body
+    assert native["description"] == description
+    if format_value["type"] != "text":
+        assert "tools" not in chat_body
+        return
+    chat_tools = chat_body["tools"]
     assert isinstance(chat_tools, list)
     chat = chat_tools[0]["function"]
     assert native["parameters"] == chat["parameters"]

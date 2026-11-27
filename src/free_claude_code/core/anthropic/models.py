@@ -1,10 +1,46 @@
 """Pydantic models for the Anthropic Messages protocol."""
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
+
+from .content import get_block_attr, get_block_type
+
+CODE_EXECUTION_INPUT_FIELDS = {
+    "code_execution": "code",
+    "bash_code_execution": "command",
+}
+CODE_EXECUTION_RESULTS = {
+    f"{name}_tool_result": name for name in CODE_EXECUTION_INPUT_FIELDS
+}
+
+
+def _native_attachment(block: object) -> str | None:
+    kind = get_block_type(block)
+    if kind in ("search_result", "document"):
+        citations = get_block_attr(block, "citations")
+        if isinstance(citations, dict) and citations.get("enabled"):
+            return f"{kind} citations"
+    if kind not in ("document", "image"):
+        return None
+    source = get_block_attr(block, "source")
+    media = get_block_type(source)
+    if media == "file":
+        return "stored file"
+    if kind == "document":
+        if media not in ("text", "content"):
+            return "document source"
+        contents = get_block_attr(source, "content")
+        if media == "content" and isinstance(contents, list):
+            for part in contents:
+                if (
+                    get_block_type(part) == "image"
+                    and get_block_type(get_block_attr(part, "source")) == "file"
+                ):
+                    return "stored file"
+    return None
 
 
 class _AnthropicBlockBase(BaseModel):
@@ -40,7 +76,16 @@ class ContentBlockToolUse(_AnthropicBlockBase):
 class ContentBlockToolResult(_AnthropicBlockBase):
     type: Literal["tool_result"]
     tool_use_id: str
-    content: str | list[Any] | dict[str, Any]
+    content: str | list[JsonValue] | JsonObject
+
+
+def tool_reference_name(part: JsonValue) -> str | None:
+    if not isinstance(part, dict) or part.get("type") != "tool_reference":
+        return None
+    name = part.get("tool_name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("A tool reference requires a tool_name")
+    return name
 
 
 class ContentBlockThinking(_AnthropicBlockBase):
@@ -80,6 +125,56 @@ class SystemContent(_AnthropicBlockBase):
     text: str
 
 
+class ExtensionBlock(_AnthropicBlockBase):
+    """A tagged block outside the set of known message variants."""
+
+    type: str = Field(min_length=1)
+
+    @property
+    def requires_native_context(self) -> bool:
+        if self.type in {
+            "compaction",
+            "container_upload",
+            "fallback",
+            "mcp_tool_listing",
+            "mcp_tool_use",
+            "mcp_tool_result",
+            "tool_addition",
+            "tool_removal",
+            "tool_search_tool_result",
+            "advisor_tool_result",
+            "text_editor_code_execution_tool_result",
+        }:
+            return True
+        if self.type == "search_result" or self.type in CODE_EXECUTION_RESULTS:
+            return False
+        fields = self.model_extra or {}
+        return (
+            self.type.endswith("_tool_use")
+            and isinstance(fields.get("id"), str)
+            and isinstance(fields.get("name"), str)
+            and "input" in fields
+        ) or (isinstance(fields.get("tool_use_id"), str) and "content" in fields)
+
+    @field_validator("type")
+    @classmethod
+    def unknown_type(cls, value: str) -> str:
+        if value in {
+            "text",
+            "image",
+            "document",
+            "tool_use",
+            "tool_result",
+            "thinking",
+            "redacted_thinking",
+            "server_tool_use",
+            "web_search_tool_result",
+            "web_fetch_tool_result",
+        }:
+            raise ValueError("Malformed known Messages content block")
+        return value
+
+
 MessageContentBlock = (
     ContentBlockText
     | ContentBlockImage
@@ -91,10 +186,11 @@ MessageContentBlock = (
     | ContentBlockServerToolUse
     | ContentBlockWebSearchToolResult
     | ContentBlockWebFetchToolResult
+    | ExtensionBlock
 )
 
 
-class Message(BaseModel):
+class Message(_AnthropicBlockBase):
     role: Literal["user", "assistant"]
     content: str | list[MessageContentBlock]
     reasoning_content: str | None = None
@@ -105,6 +201,25 @@ class Tool(_AnthropicBlockBase):
     type: str | None = None
     description: str | None = None
     input_schema: dict[str, Any] | None = None
+
+    def available_for_direct_call(self, *, discovered: bool = False) -> bool:
+        options = self.model_extra or {}
+        callers = options.get("allowed_callers")
+        return (discovered or not options.get("defer_loading")) and (
+            callers is None or (isinstance(callers, list) and "direct" in callers)
+        )
+
+
+class UnnamedTool(_AnthropicBlockBase):
+    """Opaque hosted declaration whose protocol supplies no client function name."""
+
+    type: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unknown_declaration(self) -> Self:
+        if self.type == "custom" or "name" in (self.model_extra or {}):
+            raise ValueError("A client tool requires a name")
+        return self
 
 
 class ThinkingConfig(BaseModel):
@@ -124,14 +239,14 @@ class MessagesRequest(BaseModel):
     resolved_provider_model: str | None = Field(default=None, exclude=True)
     max_tokens: int | None = None
     messages: list[Message]
-    system: str | list[SystemContent] | None = None
+    system: str | list[SystemContent | ExtensionBlock] | None = None
     stop_sequences: list[str] | None = None
     stream: bool = False
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
     metadata: dict[str, Any] | None = None
-    tools: list[Tool] | None = None
+    tools: list[Tool | UnnamedTool] | None = None
     tool_choice: JsonObject | None = None
     thinking: ThinkingConfig | None = None
     context_management: dict[str, Any] | None = None
@@ -139,6 +254,98 @@ class MessagesRequest(BaseModel):
     mcp_servers: list[dict[str, Any]] | None = None
     extra_body: dict[str, Any] | None = None
     betas: list[str] | None = Field(default=None, exclude=True)
+
+    @property
+    def native_context(self) -> str | None:
+        """Identify state that only an Anthropic continuation can interpret."""
+        for field in ("container", "thread"):
+            if any(
+                (fields or {}).get(field) is not None
+                for fields in (self.model_extra, self.extra_body)
+            ):
+                return field
+        for turn in self.messages:
+            if not isinstance(turn.content, list):
+                continue
+            for block in turn.content:
+                if (
+                    isinstance(block, ContentBlockServerToolUse)
+                    and block.name not in ("web_search", "web_fetch")
+                    and block.name not in CODE_EXECUTION_INPUT_FIELDS
+                ):
+                    return block.name
+                if (
+                    isinstance(block, (ContentBlockToolUse, ContentBlockServerToolUse))
+                    and isinstance(
+                        caller := (block.model_extra or {}).get("caller"), dict
+                    )
+                    and caller.get("type") != "direct"
+                ):
+                    return "programmatic tool history"
+                if reason := _native_attachment(block):
+                    return reason
+                if isinstance(block, ContentBlockToolResult) and isinstance(
+                    block.content, list
+                ):
+                    for part in block.content:
+                        if reason := _native_attachment(part):
+                            return f"tool result with {reason}"
+                elif (
+                    isinstance(block, ContentBlockWebFetchToolResult)
+                    and isinstance(block.content, dict)
+                    and block.content.get("type") == "web_fetch_result"
+                    and (reason := _native_attachment(block.content.get("content")))
+                ):
+                    return f"web fetch with {reason}"
+                if isinstance(block, ExtensionBlock) and block.requires_native_context:
+                    return block.type
+        return None
+
+    @property
+    def named_tools(self) -> list[Tool]:
+        return [tool for tool in self.tools or () if isinstance(tool, Tool)]
+
+    def direct_client_tools(self, *, supports_strict: bool = True) -> list[Tool]:
+        """The client functions a foreign provider can offer on this turn."""
+        tools = self.named_tools
+        discovered = (
+            self._discovered_tool_names()
+            if any((tool.model_extra or {}).get("defer_loading") for tool in tools)
+            else set()
+        )
+        return [
+            tool
+            for tool in tools
+            if tool.type in (None, "custom")
+            and tool.available_for_direct_call(discovered=tool.name in discovered)
+            and (supports_strict or not (tool.model_extra or {}).get("strict"))
+        ]
+
+    def _discovered_tool_names(self) -> set[str]:
+        """Only completed client calls can load declarations for later turns."""
+        pending: set[str] = set()
+        discovered: set[str] = set()
+        for turn in self.messages:
+            if not isinstance(turn.content, list):
+                continue
+            for block in turn.content:
+                if turn.role == "assistant" and isinstance(block, ContentBlockToolUse):
+                    pending.add(block.id)
+                elif (
+                    turn.role == "user"
+                    and isinstance(block, ContentBlockToolResult)
+                    and block.tool_use_id in pending
+                ):
+                    pending.remove(block.tool_use_id)
+                    if isinstance(block.content, list) and not (
+                        block.model_extra or {}
+                    ).get("is_error"):
+                        discovered.update(
+                            name
+                            for part in block.content
+                            if (name := tool_reference_name(part)) is not None
+                        )
+        return discovered
 
     @field_validator("max_tokens", mode="before")
     @classmethod
@@ -155,8 +362,8 @@ class TokenCountRequest(BaseModel):
     original_model: str | None = Field(default=None, exclude=True)
     resolved_provider_model: str | None = Field(default=None, exclude=True)
     messages: list[Message]
-    system: str | list[SystemContent] | None = None
-    tools: list[Tool] | None = None
+    system: str | list[SystemContent | ExtensionBlock] | None = None
+    tools: list[Tool | UnnamedTool] | None = None
     thinking: ThinkingConfig | None = None
     tool_choice: JsonObject | None = None
     context_management: dict[str, Any] | None = None

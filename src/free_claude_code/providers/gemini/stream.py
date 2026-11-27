@@ -136,14 +136,14 @@ class GeminiStream:
                 if self._output is None and self._continuation_context is None:
                     if "functionCall" in raw:
                         try:
-                            Part.model_validate(raw)
+                            Part.model_validate(raw, extra="forbid")
                         except ValueError as error:
                             raise conversion_failure(
                                 "Gemini returned an unsupported partial function call"
                             ) from error
                     continue
                 try:
-                    part = Part.model_validate(raw)
+                    part = Part.model_validate(raw, extra="forbid")
                 except ValueError as error:
                     raise conversion_failure(
                         "Gemini returned unsupported native content"
@@ -205,7 +205,7 @@ class GeminiStream:
                         )
                     )
                     self._tool_index += 1
-                elif part.inline_data is not None or part.function_response is not None:
+                elif part.model_fields_set - {"thought", "thought_signature"}:
                     raise conversion_failure("Gemini returned unsupported model output")
         if not candidates and json_object(payload.get("promptFeedback", {})).get(
             "blockReason"
@@ -226,15 +226,7 @@ class GeminiStream:
                         content["parts"] = [
                             part
                             for part in json_objects(content.get("parts", []))
-                            if any(
-                                key in part
-                                for key in (
-                                    "text",
-                                    "functionCall",
-                                    "inlineData",
-                                    "functionResponse",
-                                )
-                            )
+                            if part.keys() - {"thought"}
                         ]
                         if not content["parts"]:
                             candidate.pop("content")

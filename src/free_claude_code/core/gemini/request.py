@@ -15,9 +15,9 @@ from ..history_replay import (
 )
 from ..json_types import JsonObject, JsonValue
 from ..openai_chat import (
-    ChatToolResultImages,
+    ChatToolResultAttachments,
     close_chat_tool_result_turns,
-    image_tool_result_label,
+    tool_result_attachment_label,
 )
 from ..openai_responses import responses_reasoning_config
 from ..openai_tool_names import OpenAIToolNameCodec
@@ -104,9 +104,29 @@ def _reasoning(
 
 
 def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRequest:
+    if request.cached_content is not None:
+        raise GeminiConversionError(
+            "This destination cannot access the saved Gemini cachedContent"
+        )
+    if request.continuation_token is not None:
+        raise GeminiConversionError(
+            "A Gemini continuationToken requires native Gemini egress"
+        )
+    if request.safety_settings:
+        raise GeminiConversionError(
+            "This destination cannot enforce Gemini safetySettings"
+        )
     history = normalized_history(request)
+    latest_user = next(
+        (turn for turn in reversed(history) if turn.content.effective_role == "user"),
+        None,
+    )
+    choice = request.tool_config.function_calling_config
     declarations = [
-        item for tool in request.tools for item in tool.function_declarations
+        item
+        for tool in request.tools
+        for item in tool.function_declarations
+        if choice.permits(item.name)
     ]
     names = [item.name for item in declarations]
     for turn in history:
@@ -135,15 +155,16 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
 
     for turn in history:
         content = turn.content
-        role = (
-            "assistant"
-            if content.role == "model"
-            or (
-                content.role is None
-                and any(part.function_call is not None for part in content.parts)
+        role = "assistant" if content.effective_role == "model" else "user"
+        if turn is latest_user and not any(
+            (part.text and not part.thought)
+            or part.inline_data is not None
+            or part.function_response is not None
+            for part in content.parts
+        ):
+            raise GeminiConversionError(
+                "The latest user message has no translatable content"
             )
-            else "user"
-        )
         records = [record for bundle in turn.replay for record in bundle.records]
         echoed = "".join(part.text or "" for part in content.parts if part.thought)
         spans: list[tuple[int, int]] = []
@@ -216,11 +237,22 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
             elif result is not None:
                 assert result.id is not None
                 text = _dump(result.response)
+                media: list[JsonObject] = []
+                for attachment in result.parts:
+                    if image := attachment.inline_data:
+                        if image.display_name:
+                            media.append(
+                                {
+                                    "type": "input_text"
+                                    if destination == "responses"
+                                    else "text",
+                                    "text": f"Attachment {json.dumps(image.display_name, ensure_ascii=False)}",
+                                }
+                            )
+                        media.append(_image(image, destination))
                 if destination == "messages":
                     output: list[JsonValue] = [{"type": "text", "text": text}]
-                    output.extend(
-                        _image(part.inline_data, destination) for part in result.parts
-                    )
+                    output.extend(media)
                     _append(
                         items,
                         "user",
@@ -233,30 +265,28 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
                     )
                 elif destination == "responses":
                     output = [{"type": "input_text", "text": text}]
-                    output.extend(
-                        _image(part.inline_data, destination) for part in result.parts
-                    )
+                    output.extend(media)
                     items.append(
                         {
                             "type": "function_call_output",
                             "call_id": result.id,
-                            "output": output if result.parts else text,
+                            "output": output if media else text,
                         }
                     )
                 else:
                     items.append(
                         {"role": "tool", "tool_call_id": result.id, "content": text}
                     )
-                    if result.parts:
+                    if media:
                         images: list[JsonValue] = [
-                            {"type": "text", "text": image_tool_result_label(result.id)}
+                            {
+                                "type": "text",
+                                "text": tool_result_attachment_label(result.id),
+                            }
                         ]
-                        images.extend(
-                            _image(part.inline_data, destination)
-                            for part in result.parts
-                        )
+                        images.extend(media)
                         pending_images.append(
-                            ChatToolResultImages(role="user", content=images)
+                            ChatToolResultAttachments(role="user", content=images)
                         )
             elif part.inline_data is not None:
                 if role != "user":
@@ -304,21 +334,20 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
         body["messages" if destination == "messages" else "input"] = cast(
             list[JsonValue], items
         )
-    if request.system_instruction is not None:
-        system = "\n\n".join(
-            part.text or "" for part in request.system_instruction.parts
+    if request.system_instruction is not None and (
+        system := "\n\n".join(
+            part.text
+            for part in request.system_instruction.parts
+            if part.text is not None
         )
+    ):
         if destination == "chat":
             messages = cast(list[JsonValue], body["messages"])
             messages.insert(0, {"role": "system", "content": system})
         else:
             body["system" if destination == "messages" else "instructions"] = system
-    choice = request.tool_config.function_calling_config
-    allowed = set(choice.allowed_function_names)
     tools: list[JsonValue] = []
     for declaration in declarations:
-        if allowed and declaration.name not in allowed:
-            continue
         name = codec.encode(declaration.name)
         tool: JsonObject = {"name": name}
         if declaration.description is not None:
@@ -338,7 +367,6 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
         mode = {
             "MODE_UNSPECIFIED": "auto",
             "AUTO": "auto",
-            "NONE": "none",
             "ANY": "any" if destination == "messages" else "required",
         }[choice.mode]
         body["tool_choice"] = {"type": mode} if destination == "messages" else mode
@@ -377,11 +405,7 @@ def _controls(
         "frequency_penalty",
     ):
         value: int | float | None = getattr(config, name)
-        if value is not None:
-            if name not in mapping:
-                raise GeminiConversionError(
-                    f"{destination} cannot represent generationConfig.{name}"
-                )
+        if value is not None and name in mapping:
             body[mapping[name]] = value
     if config.stop_sequences:
         if destination == "responses":
@@ -389,12 +413,16 @@ def _controls(
         body["stop_sequences" if destination == "messages" else "stop"] = list(
             config.stop_sequences
         )
+    if config.response_format is not None and config.response_format.text is None:
+        raise GeminiConversionError(
+            "This destination cannot enforce the requested Gemini output format"
+        )
     if not config.structured:
         return
     schema = config.response_json_schema
     if config.response_schema is not None:
         schema = json_schema(config.response_schema)
-    if config.response_format is not None:
+    if config.response_format is not None and config.response_format.text is not None:
         schema = config.response_format.text.schema_
     if schema is None and destination == "messages":
         raise GeminiConversionError("Messages JSON output requires a schema")

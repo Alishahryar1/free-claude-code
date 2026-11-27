@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from free_claude_code.core.json_types import JsonObject, load_json_value
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 
 from .errors import ResponsesConversionError
 from .ids import new_call_id
@@ -22,6 +22,35 @@ class ResponsesToolIdentity:
     kind: Literal["function", "custom"]
     name: str
     namespace: str | None = None
+
+
+def definition_identity(
+    value: Mapping[str, JsonValue], namespace: str | None = None
+) -> ResponsesToolIdentity:
+    kind = "custom" if value.get("type") == "custom" else "function"
+    nested = value.get(kind)
+    if value.get("type") == "tool" and isinstance(value.get("custom"), dict):
+        nested = value["custom"]
+    source = nested if isinstance(nested, dict) else value
+    return ResponsesToolIdentity(
+        kind=kind,
+        name=required_str(source.get("name"), "tool.name"),
+        namespace=namespace
+        or optional_str(source.get("namespace"))
+        or optional_str(value.get("namespace")),
+    )
+
+
+def include_namespace_description(
+    tool: JsonObject, namespace: str, description: object
+) -> None:
+    """Carry a group's model-visible instructions onto its flattened child."""
+    if isinstance(description, str) and description:
+        prefix = f"Namespace {namespace}: {description}"
+        own = tool.get("description")
+        tool["description"] = (
+            f"{prefix}\n\n{own}" if isinstance(own, str) and own else prefix
+        )
 
 
 def flatten_responses_tool_name(name: str, *, namespace: str | None = None) -> str:
@@ -47,6 +76,12 @@ def custom_tool_input_text(value: object) -> str:
     if isinstance(value, str):
         return value
     return _json_dumps(value)
+
+
+def required_custom_tool_input(value: JsonValue) -> str:
+    if not isinstance(value, str):
+        raise ResponsesConversionError("Custom tool calls require text input")
+    return value
 
 
 def custom_tool_input_text_from_wrapper(value: object) -> str:

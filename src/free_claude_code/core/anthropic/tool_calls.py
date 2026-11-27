@@ -9,6 +9,7 @@ from free_claude_code.core.json_types import JsonObject, json_object
 from ..failures import ExecutionFailure, FailureKind
 from ..stream_recovery import SourceRecoverySnapshot, StreamFailureContext
 from ..tool_call_buffer import OrderedToolCallBuffer
+from ..tool_call_scope import ToolCallScope
 
 type SourceEvent = tuple[str, JsonObject]
 type SourceEmission = tuple[SourceEvent, ...]
@@ -21,7 +22,8 @@ class _PendingTool:
 
 
 class MessagesToolCallBuffer:
-    def __init__(self) -> None:
+    def __init__(self, scope: ToolCallScope | None = None) -> None:
+        self._scope = scope
         self._buffer = OrderedToolCallBuffer[SourceEmission | _PendingTool]()
         self._tools: dict[int, _PendingTool] = {}
         self._seen: set[int] = set()
@@ -76,10 +78,10 @@ class MessagesToolCallBuffer:
                 }
                 for key, pending in self._tools.items():
                     if successful and pending.stopped:
-                        block = pending.events[0][1]["content_block"]
-                        identity = validate_tool_identity(
-                            json_object(block), self._call_ids
-                        )
+                        block = json_object(pending.events[0][1]["content_block"])
+                        identity = validate_tool_identity(block, self._call_ids)
+                        if self._scope is not None:
+                            self._scope.require("function", block.get("name"))
                         self._buffer.budget.add(len(identity.encode("utf-8")), 0)
                         self._call_ids.add(identity)
                         self._buffer.complete(key)

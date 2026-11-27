@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 
-from free_claude_code.core.history_replay import is_replay
+from free_claude_code.core.history_replay import google_thought_signature, is_replay
 from free_claude_code.core.json_types import JsonObject, JsonValue, json_text
 
 GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator"
@@ -24,18 +24,8 @@ def apply_google_thought_signatures(
     _apply_missing_current_turn_signatures(messages)
 
 
-def _thought_signature_from_extra_content(extra_content: JsonValue) -> str | None:
-    if not isinstance(extra_content, dict):
-        return None
-    google = extra_content.get("google")
-    if not isinstance(google, dict):
-        return None
-    signature = google.get("thought_signature")
-    return signature if isinstance(signature, str) and signature else None
-
-
 def _tool_call_thought_signature(tool_call: JsonObject) -> str | None:
-    return _thought_signature_from_extra_content(tool_call.get("extra_content"))
+    return google_thought_signature(tool_call.get("extra_content"))
 
 
 def _set_thought_signature(tool_call: JsonObject, signature: str) -> None:
@@ -69,7 +59,7 @@ def apply_native_message_signatures(messages: Sequence[JsonValue]) -> None:
         ]
         if not opaque:
             continue
-        if len(opaque) == 1 and not _thought_signature_from_extra_content(
+        if len(opaque) == 1 and not google_thought_signature(
             message.get("extra_content")
         ):
             _set_thought_signature(message, json_text(opaque[0]["data"]))
@@ -127,9 +117,7 @@ def _apply_cached_tool_call_signatures(
             cached_extra_content = tool_call_extra_content_by_id.get(str(tool_call_id))
             if not cached_extra_content:
                 continue
-            cached_signature = _thought_signature_from_extra_content(
-                cached_extra_content
-            )
+            cached_signature = google_thought_signature(cached_extra_content)
             if cached_signature:
                 tool_call["extra_content"] = deepcopy(cached_extra_content)
 

@@ -48,6 +48,7 @@ from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.core.tool_call_scope import ToolCallScope, has_tool_selection
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderExecution,
@@ -179,6 +180,7 @@ class OpenAIResponsesTransport:
             extra_headers=dict(extra_headers or {}),
             request_id=request_id,
             response_model=response_model,
+            constrain_tool_calls=has_tool_selection(request.tools, request.tool_choice),
             presenter_factory=lambda pad_empty, origin: MessagesResponsesPresenter(
                 ResponsesProviderStream(
                     message_id=message_id,
@@ -209,7 +211,7 @@ class OpenAIResponsesTransport:
             prepared = build_gemini_responses_request(request, reasoning)
         except GeminiConversionError as error:
             raise InvalidRequestError(str(error)) from error
-        for field in self._omitted_request_fields - {"store", "include"}:
+        for field in self._omitted_request_fields - {"store", "include", "metadata"}:
             if field in prepared.body:
                 raise InvalidRequestError(
                     f"{self._provider_name} cannot represent Gemini control {field}"
@@ -222,6 +224,7 @@ class OpenAIResponsesTransport:
             endpoint_context=endpoint_context,
             extra_headers=extra_headers,
             continuation=continuation,
+            constrain_tool_calls=True,
             presenter_factory=lambda _pad_empty, origin: GeminiResponsesStream(
                 response_id=response_id,
                 model=response_model,
@@ -272,14 +275,26 @@ class OpenAIResponsesTransport:
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[StreamOutput]:
         try:
-            body = chat_responses_body(request)
-            for field in self._omitted_request_fields - {"store", "include"}:
+            body = chat_responses_body(
+                request,
+                custom_tool_grammar=not self._tool_policy.custom_tools_as_functions,
+            )
+            for field in self._omitted_request_fields - {
+                "store",
+                "include",
+                "metadata",
+            }:
                 if field in body:
                     raise InvalidRequestError(
                         f"{self._provider_name} cannot represent Chat control {field}"
                     )
             translated = OpenAIResponsesRequest.model_validate(body)
-            body, _ = self._build_native_body(translated, reasoning=reasoning)
+            caller_tools = (
+                ToolCallScope.from_body(body, "responses")
+                if request.constrains_returned_calls
+                else ToolCallScope(None)
+            )
+            body, tools = self._build_native_body(translated, reasoning=reasoning)
             reserved = request.reserved_tool_ids()
         except ValueError as error:
             raise InvalidRequestError(str(error)) from error
@@ -290,12 +305,15 @@ class OpenAIResponsesTransport:
             endpoint_context=endpoint_context,
             extra_headers=extra_headers,
             continuation=continuation,
+            constrain_tool_calls=request.constrains_returned_calls,
             presenter_factory=lambda _pad_empty, origin: ChatResponsesStream(
                 model=response_model,
                 origin=origin,
                 reserved_tool_ids=reserved,
                 include_usage=request.include_usage,
                 include_thoughts=reasoning.output_enabled,
+                caller_tools=caller_tools,
+                tool_events=tools.event_adapter(),
             ),
         )
 
@@ -334,7 +352,7 @@ class OpenAIResponsesTransport:
         *,
         reasoning: ReasoningPolicy,
     ) -> tuple[JsonObject, ResponsesToolAdapter]:
-        validate_history(request.model_dump(mode="json"))
+        validate_history(request.model_dump(mode="json"), "responses")
         if not request.model.strip():
             raise InvalidRequestError("Responses request model must not be empty.")
         if request.input is None or request.input == "" or request.input == []:
@@ -364,6 +382,7 @@ class OpenAIResponsesTransport:
         request_id: str | None,
         response_model: str,
         presenter_factory: ResponsesPresenterFactory,
+        constrain_tool_calls: bool = False,
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
@@ -382,6 +401,7 @@ class OpenAIResponsesTransport:
             request_id=request_id,
             response_model=response_model,
             presenter_factory=presenter_factory,
+            constrain_tool_calls=constrain_tool_calls,
             execution=execution,
             endpoint=endpoint,
             request_client=request_client,
@@ -414,6 +434,7 @@ class OpenAIResponsesTransport:
         request_id: str | None,
         response_model: str,
         presenter_factory: ResponsesPresenterFactory,
+        constrain_tool_calls: bool,
         execution: ProviderExecution,
         endpoint: RequestEndpoint | None = None,
         request_client: OpenAIRequestClient,
@@ -441,6 +462,7 @@ class OpenAIResponsesTransport:
                     request_client=request_client,
                     extra_headers=extra_headers,
                     presenter_factory=presenter_factory,
+                    constrain_tool_calls=constrain_tool_calls,
                 ),
                 reporting=FailureReporting(read_timeout_s=self._read_timeout_s),
                 provider_name=self._provider_name,
@@ -528,6 +550,7 @@ class _ResponsesAttempt(TransportAttempt):
         request_client: OpenAIRequestClient,
         extra_headers: Mapping[str, str] | None,
         presenter_factory: ResponsesPresenterFactory,
+        constrain_tool_calls: bool,
     ) -> None:
         super().__init__(context)
         self._transport = transport
@@ -538,7 +561,11 @@ class _ResponsesAttempt(TransportAttempt):
         self._client: AsyncOpenAI | None = None
         self._presenter: ResponsesStreamPresenter | None = None
         self._start_events: tuple[str, ...] = ()
-        self._tool_buffer = ResponsesToolCallBuffer()
+        self._tool_buffer = ResponsesToolCallBuffer(
+            ToolCallScope.from_body(self.body, "responses")
+            if constrain_tool_calls
+            else None
+        )
         self._adapt_event = (
             transport._event_adapter_factory()
             if transport._event_adapter_factory is not None

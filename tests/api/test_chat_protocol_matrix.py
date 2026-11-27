@@ -500,6 +500,109 @@ def test_native_chat_preserves_text_with_empty_delta_arrays(
     assert message["reasoning_details"] == []
 
 
+@pytest.mark.parametrize(("streaming", "forced"), [(False, False), (True, True)])
+def test_chat_custom_tool_round_trip_via_responses(
+    streaming: bool, forced: bool
+) -> None:
+    from tests.api.test_delivered_stream_recovery import text_events
+    from tests.api.test_four_protocol_matrix import (
+        matrix_app,
+        matrix_reply,
+        response_value,
+    )
+
+    captured: list[JsonObject] = []
+    item: JsonObject = {
+        "type": "custom_tool_call",
+        "id": "ctc_edit",
+        "call_id": "call_edit",
+        "name": "edit",
+        "input": "two words",
+        "status": "completed",
+    }
+
+    def reply(request: httpx2.Request):
+        captured.append(decode_object(request.content))
+        if len(captured) == 2:
+            return matrix_reply("responses", text_events("responses", "Edit received"))
+        return matrix_reply(
+            "responses",
+            [
+                {
+                    "type": "response.completed",
+                    "sequence_number": 0,
+                    "response": {
+                        "id": "resp_edit",
+                        "object": "response",
+                        "model": "backend",
+                        "created_at": 0,
+                        "status": "completed",
+                        "output": [item],
+                    },
+                },
+            ],
+        )
+
+    tool: JsonObject = {
+        "type": "custom",
+        "custom": {
+            "name": "edit",
+            "description": "Edit the line",
+            "format": {"type": "text"},
+        },
+    }
+    choice: JsonObject = {"type": "custom", "custom": {"name": "edit"}}
+    history: list[JsonObject] = [{"role": "user", "content": "Edit this"}]
+    body: JsonObject = {
+        "model": "public",
+        "stream": streaming,
+        "messages": history,
+        "tools": [tool],
+    }
+    if forced:
+        body["tool_choice"] = choice
+    with TestClient(matrix_app("responses", sdk_reply=reply)) as client:
+        result = client.post("/v1/chat/completions", json=body)
+        received = object_payload(response_value(result, "chat", streaming))
+        returned = object_array(received["choices"])[0]
+        assistant = object_payload(returned["message"])
+        history.extend(
+            [
+                assistant,
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_edit",
+                    "content": "Saved the edit",
+                },
+            ]
+        )
+        body.pop("tool_choice", None)
+        assert "Edit received" in client.post("/v1/chat/completions", json=body).text
+    assert captured[0]["tools"] == [
+        {
+            "type": "custom",
+            "name": "edit",
+            "description": "Edit the line",
+            "format": {"type": "text"},
+        }
+    ]
+    if forced:
+        assert captured[0]["tool_choice"] == {"type": "custom", "name": "edit"}
+    assert returned["finish_reason"] == "tool_calls"
+    assert assistant["tool_calls"] == [
+        {
+            "type": "custom",
+            "id": "call_edit",
+            "custom": {"name": "edit", "input": "two words"},
+        }
+    ]
+    assert object_array(captured[1]["input"])[-1] == {
+        "type": "custom_tool_call_output",
+        "call_id": "call_edit",
+        "output": "Saved the edit",
+    }
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_native_custom_tool_fragments_survive_public_chat_response(
     streaming: bool,

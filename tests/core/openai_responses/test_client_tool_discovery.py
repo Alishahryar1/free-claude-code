@@ -27,6 +27,10 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolPolicy,
     build_responses_chat_request,
 )
+from free_claude_code.core.openai_responses.tool_search import (
+    public_search_tools,
+    resolve_client_search_history,
+)
 from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
@@ -72,6 +76,81 @@ AGENTS: JsonObject = {
         }
     ],
 }
+
+
+def test_client_discovery_preserves_the_current_namespace_description() -> None:
+    current: JsonObject = {
+        "type": "namespace",
+        "name": "catalog",
+        "description": "Current catalog",
+        "vendor_header": "current-private",
+        "tools": [{"type": "function", "name": "count"}],
+    }
+    loaded: JsonObject = {
+        "type": "namespace",
+        "name": "catalog",
+        "description": "Earlier catalog",
+        "vendor_header": "earlier-private",
+        "tools": [{"type": "function", "name": "lookup"}],
+    }
+    request = OpenAIResponsesRequest(
+        model="test",
+        tools=[current, SEARCH],
+        input=[
+            {
+                "type": "tool_search_call",
+                "execution": "client",
+                "call_id": "s",
+                "arguments": {},
+            },
+            {
+                "type": "tool_search_output",
+                "execution": "client",
+                "call_id": "s",
+                "tools": [loaded],
+            },
+        ],
+    )
+    namespace = next(
+        tool
+        for tool in request.select_direct_tools().tools or []
+        if tool.get("type") == "namespace"
+    )
+    assert namespace["description"] == "Current catalog"
+    assert {tool["name"] for tool in object_array(namespace["tools"])} == {
+        "count",
+        "lookup",
+    }
+    adapter = ResponsesToolAdapter(
+        request, ResponsesToolPolicy(flatten_namespaces=True)
+    )
+    flattened = adapter.request.tools
+    assert "current-private" not in json.dumps(flattened)
+    assert json.dumps(flattened).count("Current catalog") == 1
+    assert adapter.restore_tools(flattened) == [current, SEARCH]
+    earlier = object_array(adapter.request.input)[1]
+    assert "earlier-private" not in json.dumps(earlier)
+    assert json.dumps(earlier).count("Earlier catalog") == 1
+    assert adapter.restore_item(earlier) == object_array(request.input)[1]
+
+
+def test_public_search_history_keeps_each_namespace_with_its_tool() -> None:
+    tools: list[JsonObject] = [
+        {"type": "function", "name": "lookup", "namespace": "alpha"},
+        {"type": "function", "namespace": "beta", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "lookup", "namespace": "gamma"}},
+        {
+            "type": "namespace",
+            "name": "delta",
+            "tools": [{"type": "function", "name": "lookup"}],
+        },
+    ]
+    assert [tool["namespace"] for tool in public_search_tools(tools)] == [
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+    ]
 
 
 def test_chat_exposes_client_search_as_a_callable_function() -> None:
@@ -130,6 +209,49 @@ def test_chat_discovery_preserves_pairing_and_activates_returned_tool() -> None:
     assert messages[2]["tool_call_id"] == "search"
     assert "spawn_agent" in string_payload(messages[2]["content"])
     assert request.model_dump() == original
+
+
+@pytest.mark.parametrize("restricted_current", [False, True])
+def test_discovery_and_current_declarations_are_selected_before_flattening(
+    restricted_current: bool,
+) -> None:
+    discovered: JsonObject = {"type": "function", "name": "count"}
+    group: JsonObject = {"type": "namespace", "name": "math", "tools": [discovered]}
+    flat: JsonObject = {"type": "function", "name": "math__count"}
+    tools = [flat]
+    if restricted_current:
+        tools.append(
+            {**group, "tools": [{**discovered, "allowed_callers": ["programmatic"]}]}
+        )
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=tools,
+        tool_choice=None
+        if restricted_current
+        else {"type": "allowed_tools", "mode": "required", "tools": [flat]},
+        input=[
+            {"role": "user", "content": "Count"},
+            {
+                "type": "tool_search_call",
+                "call_id": "s",
+                "execution": "client",
+                "arguments": {},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "s",
+                "execution": "client",
+                "tools": [group],
+            },
+        ],
+    )
+    prepared = build_responses_chat_request(
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
+    )
+    assert [
+        object_payload(tool["function"])["name"]
+        for tool in object_array(prepared.body["tools"])
+    ] == ["math__count"]
 
 
 def test_unique_bare_tool_name_restores_declared_namespace() -> None:
@@ -672,7 +794,17 @@ def test_interrupted_discovery_keeps_custom_output_source_and_later_discovery(
             item.get("tool_call_id") for item in messages if item["role"] == "tool"
         ] == ["edit", "found", "lookup"]
         assert messages[1]["reasoning_content"] == "Saved reasoning"
-        assert load_json_value(string_payload(messages[2]["content"])) == custom_output
+        relocated = next(
+            message
+            for message in messages
+            if message["role"] == "user" and isinstance(message["content"], list)
+        )
+        label, image = object_array(relocated["content"])
+        assert '"edit"' in string_payload(label["text"])
+        assert image == {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,cG5n"},
+        }
         found = next(item for item in messages if item.get("tool_call_id") == "found")
         wire_name = object_array(load_json_value(string_payload(found["content"])))[0][
             "name"
@@ -1272,6 +1404,13 @@ def test_discovery_optional_status_preserves_valid_tools(
         items = object_array(adapter.request.input)
         payload = load_json_value(string_payload(items[-1]["output"]))
         assert items[-1]["call_id"] == "search"
+    elif status in ("in_progress", "incomplete", "failed"):
+        with pytest.raises(ResponsesConversionError, match="tool result with status"):
+            build_responses_chat_request(
+                request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
+            )
+        assert request.model_dump() == original
+        return
     else:
         body = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
@@ -1377,6 +1516,33 @@ def test_discovery_call_id_does_not_imply_client_execution(execution: str) -> No
     assert "agents__spawn_agent" not in [
         tool.get("name") for tool in prepared.tools or []
     ]
+
+
+def test_unkeyed_hosted_search_identifies_only_its_own_completed_output() -> None:
+    call: JsonObject = {
+        "type": "tool_search_call",
+        "execution": "server",
+        "call_id": None,
+    }
+
+    def output(name: str) -> JsonObject:
+        return {
+            "type": "tool_search_output",
+            "call_id": None,
+            "tools": [{"type": "function", "name": name}],
+        }
+
+    history = resolve_client_search_history(
+        [
+            output("orphan"),
+            call,
+            output("found"),
+            output("extra"),
+            {**call, "status": "failed"},
+            output("unavailable"),
+        ]
+    )
+    assert {identity.name for identity in history.loaded_tools()} == {"found"}
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -1883,7 +2049,7 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
     assert sequences == sorted(set(sequences))
 
 
-def test_chat_preserves_custom_result_text_serialization() -> None:
+def test_chat_delivers_a_custom_tool_result_image_as_an_image() -> None:
     result = [{"type": "input_image", "image_url": "https://example.com/result.png"}]
     request = OpenAIResponsesRequest(
         model="example",
@@ -1902,11 +2068,13 @@ def test_chat_preserves_custom_result_text_serialization() -> None:
         request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).body
     messages = object_array(body["messages"])
-    assert len(messages) == 2
-    assert messages[-1] == {
-        "role": "tool",
-        "tool_call_id": "edit",
-        "content": json.dumps(result, separators=(",", ":")),
+    assert messages[1]["role"] == "tool" and messages[1]["tool_call_id"] == "edit"
+    assert messages[-1]["role"] == "user"
+    label, image = object_array(messages[-1]["content"])
+    assert '"edit"' in string_payload(label["text"])
+    assert image == {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/result.png"},
     }
 
 

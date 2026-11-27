@@ -141,7 +141,6 @@ def _make_anthropic_output() -> AnthropicChatStreamOutput:
 def _make_request(model: str = "test-model", stream: bool = True, **overrides: object):
     """Create a concrete request matching the original streaming-test defaults."""
     request_overrides: dict[str, object] = {
-        "messages": [],
         "max_tokens": 4096,
         "temperature": None,
         "top_p": None,

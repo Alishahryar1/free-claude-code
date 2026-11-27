@@ -1004,13 +1004,13 @@ def test_convert_image_tool_result_to_schema_valid_chat_history() -> None:
     assert result[1] == {
         "role": "tool",
         "tool_call_id": "call_image",
-        "content": "[Image-bearing tool output follows in user content.]",
+        "content": "[Tool output attachments follow in user content.]",
     }
     assert is_synthetic_chat_tool_turn_boundary(result[2])
     assert result[3]["content"] == [
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_image":',
+            "text": 'Attachments from tool call "call_image":',
         },
         {"type": "image_url", "image_url": {"url": image_url}},
     ]
@@ -1052,7 +1052,7 @@ def test_convert_mixed_image_tool_result_preserves_part_order_once() -> None:
     assert result[3]["content"] == [
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_mixed":',
+            "text": 'Attachments from tool call "call_mixed":',
         },
         {"type": "text", "text": "before"},
         {"type": "image_url", "image_url": {"url": image_url}},
@@ -1121,12 +1121,12 @@ def test_convert_parallel_image_tool_results_closes_all_tools_before_images() ->
     assert result[4]["content"] == [
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_a":',
+            "text": 'Attachments from tool call "call_a":',
         },
         {"type": "image_url", "image_url": {"url": "https://x/a.png"}},
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_b":',
+            "text": 'Attachments from tool call "call_b":',
         },
         {"type": "image_url", "image_url": {"url": "https://x/b.png"}},
     ]
@@ -1789,8 +1789,7 @@ def test_openai_build_converts_validated_anthropic_image_block() -> None:
     ]
 
 
-def test_openai_build_rejects_unknown_top_level_extras() -> None:
-    """Truly unknown keys must still be rejected (not dropped silently)."""
+def test_openai_build_omits_unknown_top_level_extras() -> None:
     req = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1798,8 +1797,7 @@ def test_openai_build_rejects_unknown_top_level_extras() -> None:
             "experimental_client_only_passthrough": True,
         }
     )
-    with pytest.raises(OpenAIConversionError, match="top-level request fields"):
-        build_base_request_body(req)
+    assert "experimental_client_only_passthrough" not in build_base_request_body(req)
 
 
 @pytest.mark.parametrize(

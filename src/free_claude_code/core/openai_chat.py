@@ -1,24 +1,131 @@
-"""OpenAI Chat Completions wire-history helpers."""
+"""Request and history fields shared by the two OpenAI protocols."""
 
 import json
+from collections.abc import Mapping
+from typing import Literal
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
-IMAGE_TOOL_RESULT_MARKER = "[Image-bearing tool output follows in user content.]"
+TOOL_RESULT_ATTACHMENT_MARKER = "[Tool output attachments follow in user content.]"
 
 
-class ChatToolResultImages(dict[str, JsonValue]):
+def url_citation_context(
+    annotations: JsonValue, *, wire: Literal["chat", "responses"]
+) -> str:
+    """Keep public evidence from a previous answer when changing protocols."""
+    if annotations is None:
+        return ""
+    if not isinstance(annotations, list):
+        raise ValueError("Text annotations must be a list")
+    citations: list[JsonObject] = []
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            raise ValueError("Text annotations must be objects")
+        kind = annotation.get("type")
+        if wire == "responses" and kind in (
+            "file_citation",
+            "container_file_citation",
+            "file_path",
+        ):
+            raise ValueError(f"A {kind} requires native Responses egress")
+        if kind != "url_citation":
+            continue
+        source = annotation.get("url_citation") if wire == "chat" else annotation
+        if (
+            not isinstance(source, dict)
+            or not isinstance(url := source.get("url"), str)
+            or not url
+        ):
+            raise ValueError("A URL citation requires a URL")
+        citation: JsonObject = {"url": url}
+        if isinstance(title := source.get("title"), str):
+            citation["title"] = title
+        for key in ("start_index", "end_index"):
+            if type(index := source.get(key)) is int:
+                citation[key] = index
+        citations.append(citation)
+    return (
+        f"URL citations: {json.dumps(citations, ensure_ascii=False)}"
+        if citations
+        else ""
+    )
+
+
+def shared_openai_request_options(body: Mapping[str, JsonValue]) -> JsonObject:
+    options = {
+        key: body[key]
+        for key in ("prompt_cache_key", "prompt_cache_retention", "safety_identifier")
+        if body.get(key) is not None
+    }
+    cache = body.get("prompt_cache_options")
+    if isinstance(cache, Mapping):
+        common: JsonObject = {}
+        if cache.get("mode") in ("implicit", "explicit"):
+            common["mode"] = cache["mode"]
+        # Both protocols support longer lifetimes per part, but only Responses
+        # supports 12h as the default for the entire request.
+        if cache.get("ttl") == "30m":
+            common["ttl"] = "30m"
+        if common:
+            options["prompt_cache_options"] = common
+    return options
+
+
+def openai_cache_breakpoint(part: Mapping[str, JsonValue]) -> JsonObject:
+    marker = part.get("prompt_cache_breakpoint")
+    if not isinstance(marker, Mapping):
+        return {}
+    return {
+        "prompt_cache_breakpoint": {
+            key: marker[key] for key in ("mode", "ttl") if key in marker
+        }
+    }
+
+
+def inline_file_fields(
+    value: JsonValue, *, pdf_only: bool = False
+) -> JsonObject | None:
+    """Copy portable OpenAI file fields without fetching or re-encoding the data."""
+    if (
+        not isinstance(value, Mapping)
+        or value.get("file_id") is not None
+        or value.get("file_url") is not None
+    ):
+        return None
+    data, name = value.get("file_data"), value.get("filename")
+    if (
+        not isinstance(data, str)
+        or not data
+        or (name is not None and not isinstance(name, str))
+    ):
+        return None
+    if pdf_only:
+        if data[:5].lower() == "data:":
+            comma = data.find(",")
+            if comma < 0 or comma + 1 == len(data):
+                return None
+            header = data[:comma].lower()
+            if header.split(";", 1)[0] != "data:application/pdf" or not header.endswith(
+                ";base64"
+            ):
+                return None
+        elif not (isinstance(name, str) and name.lower().endswith(".pdf")):
+            return None
+    fields: JsonObject = {"file_data": data}
+    if name is not None:
+        fields["filename"] = name
+    return fields
+
+
+class ChatToolResultAttachments(dict[str, JsonValue]):
     """Relocated tool output, retaining turn ownership until serialization."""
 
     __slots__ = ()
 
 
-def image_tool_result_label(tool_call_id: str) -> str:
-    """Label relocated visual output with its source function-call identity."""
-    return (
-        "Image-bearing output for tool call "
-        f"{json.dumps(tool_call_id, ensure_ascii=False)}:"
-    )
+def tool_result_attachment_label(tool_call_id: str) -> str:
+    """Label relocated attachments with their source tool call."""
+    return f"Attachments from tool call {json.dumps(tool_call_id, ensure_ascii=False)}:"
 
 
 def computer_screenshot_label(call_id: str) -> str:

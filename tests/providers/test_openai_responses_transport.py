@@ -21,6 +21,8 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import (
@@ -300,6 +302,55 @@ async def test_default_transport_keeps_native_tool_capabilities() -> None:
         )
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_chat_custom_tool_retains_its_kind_on_a_function_only_provider() -> None:
+    from tests.providers.test_native_tool_arguments import tool_events
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = decode_object(request.content)
+        assert object_array(body["tools"])[0]["type"] == "function"
+        assert body["tool_choice"] == {"type": "function", "name": "edit"}
+        return httpx2.Response(
+            200,
+            text=_sse(*tool_events("responses", '{"input":"two words"}', name="edit")),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _client(handler)
+    try:
+        transport = _transport(
+            client, tool_policy=ResponsesToolPolicy(custom_tools_as_functions=True)
+        )
+        request = ChatRequest(
+            model="example",
+            messages=[{"role": "user", "content": "edit this"}],
+            tools=[{"type": "custom", "custom": {"name": "edit"}}],
+            tool_choice={"type": "custom", "custom": {"name": "edit"}},
+        )
+        stream = transport.stream_chat(
+            request,
+            input_tokens=2,
+            request_id="req",
+            response_model="public",
+            reasoning=DEFAULT_REASONING_POLICY,
+        )
+        frames = await collect_response(stream, protocol="chat")
+    finally:
+        await client.close()
+    aggregate = ChatResponseAccumulator()
+    for event in parse_sse_text("".join(frames)):
+        aggregate.feed(event.data)
+    aggregate.finish()
+    result = object_array(aggregate.result()["choices"])[0]
+    assert object_payload(result["message"])["tool_calls"] == [
+        {
+            "id": "call_probe",
+            "type": "custom",
+            "custom": {"name": "edit", "input": "two words"},
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1652,6 +1703,6 @@ async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire() -> None:
     )
     assert regex.fullmatch("demo")
     assert not regex.fullmatch("bad\U000e0001name")
-    assert request.tools is not None
-    assert request.tools[0].input_schema is not None
-    assert request.tools[0].input_schema["properties"]["name"]["pattern"] == pattern
+    schema = request.direct_client_tools()[0].input_schema
+    assert schema is not None
+    assert schema["properties"]["name"]["pattern"] == pattern

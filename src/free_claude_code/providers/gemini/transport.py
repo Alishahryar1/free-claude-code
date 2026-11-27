@@ -13,6 +13,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.continuation_request import ContinuationRequest
+from free_claude_code.core.gemini.models import FunctionCallingConfig
 from free_claude_code.core.history_replay import HistoryReplayError
 from free_claude_code.core.json_types import JsonObject, normalize_empty_array_field
 from free_claude_code.core.stream_output import StreamOutput, completed_output
@@ -282,11 +283,21 @@ class _GeminiAttempt(TransportAttempt):
                     )
                     if isinstance(schema, dict) and "default" in schema
                 }
+        output = self._output_factory()
+        allowed_names = frozenset(tool_defaults)
+        config = self.sent_body.get("toolConfig")
+        if output is not None and isinstance(config, dict):
+            choice = FunctionCallingConfig.model_validate(
+                config.get("functionCallingConfig", {})
+            )
+            allowed_names = frozenset(
+                name for name in tool_defaults if choice.permits(name)
+            )
         presenter = self._presenter = GeminiStream(
             model=self._response_model,
             origin=self._origin,
-            output=self._output_factory(),
-            tool_names=frozenset(tool_defaults),
+            output=output,
+            tool_names=allowed_names,
             tool_defaults=tool_defaults,
             include_thoughts=self._include_thoughts,
             continuation_context=self._continuation.sent_context(

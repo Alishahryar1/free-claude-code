@@ -60,7 +60,6 @@ from free_claude_code.core.gemini.native_request import messages_to_gemini
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
 from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
-from free_claude_code.core.openai_responses.errors import ResponsesConversionError
 from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
 )
@@ -503,15 +502,15 @@ def test_plans_exact_automatic_web_search(tool_choice: dict[str, Any] | None) ->
     assert plan.domains.blocked == ()
     assert plan.request.tool_choice == tool_choice
     assert plan.request.tools is not None
-    assert [tool.name for tool in plan.request.tools] == [HIDDEN_WEB_SEARCH_NAME]
-    assert plan.request.tools[0].input_schema == {
+    assert [tool.name for tool in plan.request.named_tools] == [HIDDEN_WEB_SEARCH_NAME]
+    assert plan.request.named_tools[0].input_schema == {
         "type": "object",
         "properties": {"query": {"type": "string"}},
         "required": ["query"],
         "additionalProperties": False,
     }
     assert request.tools is not None
-    assert request.tools[0].name == "web_search"
+    assert request.named_tools[0].name == "web_search"
 
 
 def test_ordinary_function_named_web_search_remains_a_client_tool() -> None:
@@ -549,7 +548,117 @@ def test_does_not_plan_noncanonical_automatic_search(tool: Tool) -> None:
     assert plan_automatic_web_search(request, web_tools_enabled=True) is None
 
 
-def test_does_not_plan_unsupported_typed_tools_or_extended_auto_choice() -> None:
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [("web_search", "web_search_20250305"), ("web_fetch", "web_fetch_20250910")],
+)
+@pytest.mark.parametrize(
+    "restriction",
+    [{"allowed_callers": ["code_execution_20260120"]}, {"defer_loading": True}],
+)
+def test_web_tool_must_be_available_for_local_execution(
+    name: str, kind: str, restriction: dict[str, Any]
+) -> None:
+    tool = Tool(name=name, type=kind, **restriction)
+    request = _automatic_search_request(tool=tool)
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+    request.tool_choice = {"type": "tool", "name": name}
+    assert not is_web_server_tool_request(request)
+
+
+def test_search_selection_preserves_completed_code_execution_errors() -> None:
+    request = _automatic_search_request()
+    request.messages.insert(
+        0,
+        Message.model_validate(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "name": "code_execution",
+                        "id": "srv1",
+                        "input": {"code": "previous input"},
+                    },
+                    {
+                        "type": "code_execution_tool_result",
+                        "tool_use_id": "srv1",
+                        "content": {
+                            "type": "code_execution_tool_result_error",
+                            "error_code": "unavailable",
+                        },
+                    },
+                ],
+            }
+        ),
+    )
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+    assert plan is not None
+    history = plan.request.messages[0].model_dump_json()
+    assert history.index("previous input") < history.index("unavailable")
+    assert history.count("[Earlier tool record]") == 2
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        {"container": "saved_container"},
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "url",
+                                "url": "https://example.invalid/report.pdf",
+                            },
+                        },
+                        {"type": "text", "text": "Search for the report's author"},
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "web_fetch_tool_result",
+                            "tool_use_id": "w",
+                            "content": {
+                                "type": "web_fetch_result",
+                                "url": "https://example.invalid",
+                                "content": {
+                                    "type": "document",
+                                    "citations": {"enabled": True},
+                                    "source": {
+                                        "type": "text",
+                                        "media_type": "text/plain",
+                                        "data": "Report",
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                }
+            ]
+        },
+    ],
+)
+def test_native_context_keeps_optional_and_forced_web_tools_with_the_provider(
+    context: JsonObject,
+) -> None:
+    request = _automatic_search_request()
+    request = MessagesRequest.model_validate({**request.model_dump(), **context})
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+    request.tool_choice = {"type": "tool", "name": "web_search"}
+    assert not is_web_server_tool_request(request)
+
+
+def test_plans_supported_search_beside_an_unhandled_tool() -> None:
     mixed = _automatic_search_request()
     mixed.tools = [
         Tool(name="web_search", type="web_search_20250305"),
@@ -559,22 +668,26 @@ def test_does_not_plan_unsupported_typed_tools_or_extended_auto_choice() -> None
         tool_choice={"type": "auto", "disable_parallel_tool_use": True}
     )
 
-    for request in (mixed, extended_choice):
-        assert plan_automatic_web_search(request, web_tools_enabled=True) is None
-        assert (
-            unsupported_server_tool_error(request, web_tools_enabled=True) is not None
-        )
+    plan = plan_automatic_web_search(mixed, web_tools_enabled=True)
+    assert plan is not None
+    assert [tool.name for tool in plan.request.named_tools] == [
+        plan.private_name,
+        "code_execution",
+    ]
+    assert plan_automatic_web_search(extended_choice, web_tools_enabled=True) is None
+    assert (
+        unsupported_server_tool_error(extended_choice, web_tools_enabled=True) is None
+    )
 
 
 @pytest.mark.parametrize(
     "options",
     [
-        {"allowed_callers": ["code_execution_20260120"]},
         {"strict": True},
         {"defer_loading": True},
     ],
 )
-def test_automatic_web_search_rejects_unrepresentable_client_tool_constraints(
+def test_automatic_web_search_keeps_provider_tool_selection_at_egress(
     options: dict[str, Any],
 ) -> None:
     request = _automatic_search_request()
@@ -583,13 +696,18 @@ def test_automatic_web_search_rejects_unrepresentable_client_tool_constraints(
     )
     assert request.tools is not None
     request.tools.append(tool)
-    field = next(iter(options))
-    with pytest.raises(InvalidRequestError, match=field):
-        plan_automatic_web_search(request, web_tools_enabled=True)
-
-    request.tools = [tool]
-    with pytest.raises(ResponsesConversionError, match=field):
-        build_responses_provider_request(request, reasoning=ReasoningPolicy.off())
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+    assert plan is not None
+    assert tool in plan.request.named_tools
+    body: JsonObject = build_responses_provider_request(
+        plan.request, reasoning=ReasoningPolicy.off()
+    )
+    offered = {entry["name"]: entry for entry in object_array(body["tools"])}
+    assert plan.private_name in offered
+    if options.get("strict"):
+        assert offered["lookup"]["strict"] is True
+    else:
+        assert "lookup" not in offered
 
 
 @pytest.mark.parametrize(
@@ -610,10 +728,6 @@ def test_automatic_web_search_rejects_unrepresentable_client_tool_constraints(
         (
             Tool(name="web_search", type="web_search_20250305", max_uses=0),
             "must be a positive integer",
-        ),
-        (
-            Tool(name="web_search", type="web_search_20250305", unknown="value"),
-            "unsupported option",
         ),
         (
             Tool(
@@ -761,7 +875,7 @@ async def test_automatic_web_search_replays_provider_response_when_declined(
     assert translated.model == "upstream-model"
     assert translated.tool_choice == {"type": "auto"}
     assert translated.tools is not None
-    assert [tool.name for tool in translated.tools] == [HIDDEN_WEB_SEARCH_NAME]
+    assert [tool.name for tool in translated.named_tools] == [HIDDEN_WEB_SEARCH_NAME]
     assert provider.stream_kwargs == [
         {
             "input_tokens": provider.stream_kwargs[0]["input_tokens"],
@@ -858,6 +972,79 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
     }
     assert len(provider.requests) == 1
     assert provider.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_local_search_preserves_completed_provider_tool_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _provider_tool_events()
+    tail = events[-2:]
+    events = events[:-2]
+    hosted: list[JsonObject] = [
+        {
+            "type": "server_tool_use",
+            "id": "srv_calc",
+            "name": "code_execution",
+            "input": {"code": "print(42)"},
+        },
+        {
+            "type": "code_execution_tool_result",
+            "tool_use_id": "srv_calc",
+            "content": {
+                "type": "code_execution_result",
+                "stdout": "result 42",
+                "stderr": "",
+                "return_code": 0,
+                "content": [],
+            },
+        },
+    ]
+    for index, block in enumerate(hosted, start=1):
+        events.append(
+            format_sse_event(
+                "content_block_start",
+                {"type": "content_block_start", "index": index, "content_block": block},
+            )
+        )
+        events.append(
+            format_sse_event(
+                "content_block_stop", {"type": "content_block_stop", "index": index}
+            )
+        )
+    terminal = parse_sse_text(tail[0])[0].data
+    object_payload(terminal["usage"])["server_tool_use"] = {
+        "code_execution_requests": 1
+    }
+    events.extend([format_sse_event("message_delta", terminal), tail[1]])
+    request = _automatic_search_request(stream=False)
+    request.tools = [
+        *(request.tools or []),
+        Tool(name="code_execution", type="code_execution_20250825"),
+    ]
+    search = AsyncMock(return_value=[])
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    service = _automatic_search_service(ScriptedSelectionProvider(events))
+    response = await service.create(request)
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    message = _json_body(response)
+    content = object_array(message["content"])
+    assert [block["type"] for block in content] == [
+        "server_tool_use",
+        "web_search_tool_result",
+        "server_tool_use",
+        "code_execution_tool_result",
+        "text",
+    ]
+    assert content[2]["id"] == content[3]["tool_use_id"] == "srv_calc"
+    assert object_payload(content[3]["content"])["stdout"] == "result 42"
+    assert message["stop_reason"] == "end_turn"
+    assert object_payload(message["usage"])["server_tool_use"] == {
+        "code_execution_requests": 1,
+        "web_search_requests": 1,
+    }
+    search.assert_awaited_once_with("selected")
 
 
 @pytest.mark.asyncio
@@ -1004,7 +1191,7 @@ async def test_automatic_web_search_uses_distinct_name_from_client_tool(
 
     assert isinstance(response, JSONResponse)
     assert response.status_code == 200
-    sent_tools = provider.requests[0].tools
+    sent_tools = provider.requests[0].named_tools
     assert sent_tools is not None
     assert [tool.name for tool in sent_tools] == [HIDDEN_WEB_SEARCH_NAME, private_name]
     search.assert_awaited_once_with("selected")
@@ -1092,6 +1279,14 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
         for block in array_payload(body["content"])
         if object_payload(block)["type"] == "tool_use"
     ] == ["retrieve"]
+    search_result = next(
+        block
+        for block in object_array(body["content"])
+        if block["type"] == "web_search_tool_result"
+    )
+    object_array(search_result["content"])[0]["encrypted_content"] = (
+        "opaque-search-state"
+    )
     request.messages.extend(
         [
             Message.model_validate({"role": "assistant", "content": body["content"]}),
@@ -1125,6 +1320,7 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
     search_response, client_response = responses if search_first else responses[::-1]
     assert object_payload(search_response).get("id") == search_id
     assert "https://example.com/found" in json.dumps(search_response)
+    assert "opaque-search-state" not in json.dumps(search_response)
     assert object_payload(client_response)["id"] == "client_id"
     assert object_payload(client_response)["response"] == {"output": "retrieved body"}
 
@@ -2693,7 +2889,7 @@ async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_id", _PROVIDER_IDS)
-async def test_service_rejects_listed_server_tools_for_every_provider(
+async def test_service_rejects_disabled_forced_server_tools_for_every_provider(
     provider_id: str,
 ) -> None:
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
@@ -2711,6 +2907,7 @@ async def test_service_rejects_listed_server_tools_for_every_provider(
         model="m",
         max_tokens=20,
         messages=[Message(role="user", content="q")],
+        tool_choice={"type": "tool", "name": "web_search"},
         tools=[Tool(name="web_search", type="web_search_20250305")],
     )
     with pytest.raises(InvalidRequestError, match="ENABLE_WEB_SERVER_TOOLS=false"):
@@ -2889,3 +3086,32 @@ def test_forced_tools_keep_permissive_matching(tool_name: str) -> None:
     assert is_web_server_tool_request(request)
     assert plan_automatic_web_search(request, web_tools_enabled=True) is None
     assert unsupported_server_tool_error(request, web_tools_enabled=True) is None
+
+
+@pytest.mark.asyncio
+async def test_forced_search_enforces_its_domain_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    search = AsyncMock(
+        return_value=[
+            WebSearchResult(title="included", url="https://example.com/one"),
+            WebSearchResult(title="excluded", url="https://elsewhere.test/two"),
+        ]
+    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    provider = ScriptedSelectionProvider([])
+    request = _automatic_search_request(
+        stream=False,
+        tool=Tool(
+            name="web_search",
+            type="web_search_20250305",
+            allowed_domains=["example.com"],
+        ),
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+    response = await _automatic_search_service(provider).create(request)
+    assert isinstance(response, JSONResponse)
+    assert "example.com/one" in str(_json_body(response))
+    assert "elsewhere.test" not in str(_json_body(response))
+    search.assert_awaited_once()
+    assert not provider.requests

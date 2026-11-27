@@ -165,14 +165,7 @@ def test_off_overrides_native_hint_without_dropping_independent_effort() -> None
     assert options.output_effort == "low"
 
 
-def test_unknown_thinking_options_and_adaptive_budget_rejected() -> None:
-    with pytest.raises(NativeMessagesError, match="Unsupported native thinking option"):
-        resolve_messages_options(
-            model="m",
-            max_tokens=None,
-            reasoning=ReasoningPolicy(),
-            thinking=ThinkingConfig.model_validate({"type": "adaptive", "mystery": 1}),
-        )
+def test_adaptive_thinking_rejects_exact_budget() -> None:
     with pytest.raises(NativeMessagesError, match="exact token budget"):
         resolve_messages_options(
             model="m",

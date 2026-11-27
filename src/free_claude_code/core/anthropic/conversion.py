@@ -1,7 +1,7 @@
 """Message and tool format converters."""
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -9,33 +9,38 @@ from typing import Any, Protocol
 
 from free_claude_code.core.history_replay import (
     HistoryReplayError,
+    google_thought_signature,
     has_readable_replay,
     is_replay,
     readable_reasoning,
     reasoning_detail,
-    tool_history_context,
     unprotected_replay,
     validate_hosted_tool_history,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import (
-    IMAGE_TOOL_RESULT_MARKER,
-    ChatToolResultImages,
+    TOOL_RESULT_ATTACHMENT_MARKER,
+    ChatToolResultAttachments,
     close_chat_tool_result_turns,
-    image_tool_result_label,
+    tool_result_attachment_label,
 )
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 
 from .content import get_block_attr, get_block_type
 from .image_sources import AnthropicImageSourceError, portable_anthropic_image_url
-from .models import MessagesRequest, Tool
-from .request_serialization import serialize_tool_result_content
+from .models import ExtensionBlock, MessagesRequest, Tool
+from .request_serialization import (
+    openai_output_schema,
+    serialize_tool_result_content,
+    translated_messages,
+)
 from .tool_results import (
     ToolResultImage,
     ToolResultText,
     decompose_tool_result_content,
 )
 from .utils import set_if_not_none
+from .web_history import web_history_text
 
 
 class OpenAIConversionError(Exception):
@@ -66,57 +71,26 @@ class ReasoningReplayMode(StrEnum):
 
 
 def resolve_anthropic_tool_choice(
-    tools: Sequence[object] | None,
+    tools: Sequence[Tool] | None,
     tool_choice: JsonObject | None,
 ) -> JsonObject | None:
-    """Materialize Anthropic's automatic choice when tools are available.
-
-    A choice with no tools has nothing to act on, so it is dropped rather than
-    forwarded. Gemini rejects the whole request otherwise, with "Function calling
-    config is set without function_declarations".
-    """
-    if not tools:
-        return None
-    if tool_choice is not None:
-        return tool_choice
-    return {"type": "auto"}
-
-
-def unrepresentable_client_tool_constraints(tool: Tool) -> list[str]:
-    """Identify Anthropic constraints a plain upstream function cannot enforce."""
-    options: Mapping[str, object] = tool.model_extra or {}
-    unsupported = [
-        key
-        for key in ("strict", "defer_loading")
-        if options.get(key) not in (None, False)
-    ]
-    if options.get("allowed_callers") not in (None, ["direct"]):
-        unsupported.append("allowed_callers")
-    return unsupported
+    """Validate the caller's choice against the functions that survived translation."""
+    kind = tool_choice.get("type") if tool_choice else "auto"
+    if kind == "tool" and not any(
+        tool.name == (tool_choice or {}).get("name") for tool in tools or ()
+    ):
+        raise ValueError("Named tool choice requires an available function")
+    if kind in ("any", "required") and not tools:
+        raise ValueError("Required tool choice has no available functions")
+    if kind not in ("auto", "any", "required", "none", "tool"):
+        raise ValueError("Unsupported tool choice")
+    return (tool_choice or {"type": "auto"}) if tools else None
 
 
 def _set_replayed_reasoning(
     message: dict[str, Any], reasoning: str, mode: ReasoningReplayMode
 ) -> None:
     message[mode.value] = reasoning
-
-
-def _openai_reject_native_only_top_level_fields(
-    request_data: MessagesRequest,
-) -> None:
-    """OpenAI chat providers may only convert known top-level request fields.
-
-    First-class model fields (e.g. ``context_management``) are not forwarded to
-    the OpenAI API but are allowed so clients do not hit spurious 400s.
-    Unknown extra keys (``__pydantic_extra__``) are still rejected.
-    """
-    extra = request_data.model_extra
-    if not extra:
-        return
-    raise OpenAIConversionError(
-        "OpenAI chat conversion does not support these top-level request fields: "
-        f"{sorted(extra)}. Remove the unsupported fields."
-    )
 
 
 def _tool_input_schema(tool: object) -> dict[str, Any]:
@@ -145,8 +119,10 @@ def _tool_call_from_tool_use(block: object) -> dict[str, Any]:
         },
     }
     extra_content = get_block_attr(block, "extra_content", None)
-    if isinstance(extra_content, dict) and extra_content:
-        tool_call["extra_content"] = deepcopy(extra_content)
+    if isinstance(extra_content, dict) and (
+        signature := google_thought_signature(extra_content)
+    ):
+        tool_call["extra_content"] = {"google": {"thought_signature": signature}}
     return tool_call
 
 
@@ -275,7 +251,7 @@ def _openai_chat_tool_result(block: object) -> _OpenAIChatToolResult:
         )
 
     rich_parts: list[JsonObject] = [
-        {"type": "text", "text": image_tool_result_label(tool_id)}
+        {"type": "text", "text": tool_result_attachment_label(tool_id)}
     ]
     for part in decomposed.parts:
         if isinstance(part, ToolResultText):
@@ -287,9 +263,9 @@ def _openai_chat_tool_result(block: object) -> _OpenAIChatToolResult:
         tool_message={
             "role": "tool",
             "tool_call_id": tool_id,
-            "content": IMAGE_TOOL_RESULT_MARKER,
+            "content": TOOL_RESULT_ATTACHMENT_MARKER,
         },
-        rich_user_message=ChatToolResultImages(role="user", content=rich_parts),
+        rich_user_message=ChatToolResultAttachments(role="user", content=rich_parts),
     )
 
 
@@ -496,31 +472,31 @@ class AnthropicToOpenAIConverter:
     ) -> list[dict[str, Any]]:
         ledger = _OpenAIChatHistoryLedger()
 
-        for msg in messages:
-            role = msg.role
-            content = msg.content
-            reasoning_content = _clean_reasoning_content(
-                getattr(msg, "reasoning_content", None)
-            )
+        try:
+            for msg in messages:
+                role = msg.role
+                content = msg.content
+                if role == "user" and isinstance(content, list):
+                    ledger.add_user_blocks(content)
+                    continue
+                segments = AnthropicToOpenAIConverter._convert_message_to_segments(
+                    role,
+                    content,
+                    reasoning_content=_clean_reasoning_content(
+                        getattr(msg, "reasoning_content", None)
+                    ),
+                    reasoning_replay=reasoning_replay,
+                    structured_reasoning_details=structured_reasoning_details,
+                )
+                for segment in segments:
+                    if isinstance(segment, _PlainSegment):
+                        ledger.add_plain(segment.messages)
+                    else:
+                        ledger.add_tool_turn(segment)
+            ordered_messages = ledger.finish()
+        except HistoryReplayError as error:
+            raise OpenAIConversionError(str(error)) from error
 
-            if role == "user" and isinstance(content, list):
-                ledger.add_user_blocks(content)
-                continue
-
-            segments = AnthropicToOpenAIConverter._convert_message_to_segments(
-                role,
-                content,
-                reasoning_content=reasoning_content,
-                reasoning_replay=reasoning_replay,
-                structured_reasoning_details=structured_reasoning_details,
-            )
-            for segment in segments:
-                if isinstance(segment, _PlainSegment):
-                    ledger.add_plain(segment.messages)
-                else:
-                    ledger.add_tool_turn(segment)
-
-        ordered_messages = ledger.finish()
         closed_messages = close_chat_tool_result_turns(ordered_messages)
         return _coalesce_openai_user_messages(closed_messages)
 
@@ -534,19 +510,16 @@ class AnthropicToOpenAIConverter:
         structured_reasoning_details: bool = False,
     ) -> list[_TranscriptSegment]:
         if role == "assistant" and isinstance(content, list):
-            try:
-                validate_hosted_tool_history(
-                    [
-                        {
-                            "type": get_block_type(block),
-                            "id": get_block_attr(block, "id", None),
-                            "tool_use_id": get_block_attr(block, "tool_use_id", None),
-                        }
-                        for block in content
-                    ]
-                )
-            except HistoryReplayError as error:
-                raise OpenAIConversionError(str(error)) from error
+            validate_hosted_tool_history(
+                [
+                    {
+                        "type": get_block_type(block),
+                        "id": get_block_attr(block, "id"),
+                        "tool_use_id": get_block_attr(block, "tool_use_id"),
+                    }
+                    for block in content
+                ]
+            )
             if (first_i := _index_first_tool_use(content)) is not None:
                 for block in content:
                     if get_block_type(block) == "tool_use":
@@ -715,19 +688,7 @@ class AnthropicToOpenAIConverter:
                 "web_search_tool_result",
                 "web_fetch_tool_result",
             }:
-                value = block
-                if not isinstance(value, dict):
-                    dump: object = getattr(block, "model_dump", None)
-                    if not callable(dump):
-                        raise OpenAIConversionError(
-                            "Anthropic hosted tool blocks require an object."
-                        )
-                    value = dump(mode="json", exclude_none=True)
-                if not isinstance(value, dict):
-                    raise OpenAIConversionError(
-                        "Anthropic hosted tool blocks require an object."
-                    )
-                content_parts.append(tool_history_context(value))
+                content_parts.append(web_history_text(block))
             elif block_type == "tool_use":
                 tool_calls.append(_tool_call_from_tool_use(block))
             else:
@@ -870,14 +831,22 @@ def build_base_request_body(
     structured_reasoning_details: bool = False,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
-    _openai_reject_native_only_top_level_fields(request_data)
+    tools = request_data.direct_client_tools()
+    try:
+        source_messages = translated_messages(request_data)
+        output_schema = openai_output_schema(request_data)
+        tool_choice = resolve_anthropic_tool_choice(tools, request_data.tool_choice)
+    except ValueError as error:
+        raise OpenAIConversionError(str(error)) from error
     messages = AnthropicToOpenAIConverter.convert_messages(
-        request_data.messages,
+        source_messages,
         reasoning_replay=reasoning_replay,
         structured_reasoning_details=structured_reasoning_details,
     )
 
     system = request_data.system
+    if isinstance(system, list):
+        system = [block for block in system if not isinstance(block, ExtensionBlock)]
     if system:
         system_msg = AnthropicToOpenAIConverter.convert_system_prompt(system)
         if system_msg:
@@ -885,6 +854,8 @@ def build_base_request_body(
 
     body: dict[str, Any] = {"model": request_data.model, "messages": messages}
 
+    if output_schema is not None:
+        body["response_format"] = {"type": "json_schema", "json_schema": output_schema}
     max_tokens = request_data.max_tokens
     set_if_not_none(body, "max_tokens", max_tokens or default_max_tokens)
     set_if_not_none(body, "temperature", request_data.temperature)
@@ -894,10 +865,18 @@ def build_base_request_body(
     if stop_sequences:
         body["stop"] = stop_sequences
 
-    tools = request_data.tools
     if tools:
         body["tools"] = AnthropicToOpenAIConverter.convert_tools(tools)
-    tool_choice = resolve_anthropic_tool_choice(tools, request_data.tool_choice)
+        for declaration, tool in zip(body["tools"], tools, strict=True):
+            options = tool.model_extra or {}
+            if "strict" in options:
+                declaration["function"]["strict"] = options["strict"]
+    if (
+        tool_choice
+        and tool_choice.get("disable_parallel_tool_use")
+        and tool_choice.get("type") != "none"
+    ):
+        body["parallel_tool_calls"] = False
     if tool_choice:
         body["tool_choice"] = AnthropicToOpenAIConverter.convert_tool_choice(
             tool_choice

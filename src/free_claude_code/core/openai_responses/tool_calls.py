@@ -10,6 +10,7 @@ from ..failures import ExecutionFailure, FailureKind
 from ..json_types import DecimalJsonValue, JsonObject, json_object, json_text
 from ..stream_recovery import SourceRecoverySnapshot, StreamFailureContext
 from ..tool_call_buffer import OrderedToolCallBuffer, RetentionBudget
+from ..tool_call_scope import ToolCallScope
 from .tool_search import is_client_search
 
 type SourceEvent = tuple[str, JsonObject]
@@ -45,7 +46,8 @@ class _PendingItem:
 
 
 class ResponsesToolCallBuffer:
-    def __init__(self) -> None:
+    def __init__(self, scope: ToolCallScope | None = None) -> None:
+        self._scope = scope
         self._budget = RetentionBudget()
         self._buffer = OrderedToolCallBuffer[SourceEmission | _PendingItem](
             self._budget
@@ -198,6 +200,13 @@ class ResponsesToolCallBuffer:
             initial = pending.item.get(key)
             if initial not in (None, "") and initial != item.get(key):
                 raise _failure("Responses completion changed the tool identity")
+        if self._scope is not None:
+            kind = (
+                "custom"
+                if item["type"] == "custom_tool_call"
+                else str(item["type"]).removesuffix("_call")
+            )
+            self._scope.require(kind, name, item.get("namespace"))
         if call_id in self._call_ids and self._call_ids[call_id] != identity:
             raise _failure("Responses items share an execution call ID")
         self._budget.add(len(call_id.encode("utf-8")), 0)
