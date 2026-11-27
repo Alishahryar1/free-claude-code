@@ -499,11 +499,11 @@ function Add-KnownBinDirectories {
     if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
         Add-PathEntry (Join-Path $env:USERPROFILE ".local\bin")
         Add-PathEntry (Join-Path $env:USERPROFILE ".opencode\bin")
+        Add-PathEntry (Join-Path $env:USERPROFILE ".hermes\bin")
     }
     if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        Add-PathEntry (Join-Path $env:LOCALAPPDATA "hermes\bin")
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\bin")
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "Programs\OpenAI\Codex\bin")
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "pi-node\current")
         Add-PathEntry (Join-Path $env:LOCALAPPDATA "Programs\Muse Code\bin")
@@ -1299,6 +1299,17 @@ function Install-Hermes {
         -Url $HermesInstallUrl `
         -Name "Hermes Agent" `
         -ScriptArguments @("-NonInteractive")
+    if (-not [string]::IsNullOrWhiteSpace($env:HERMES_HOME)) {
+        Add-PathEntry (Join-Path $env:HERMES_HOME "bin")
+    }
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not [string]::IsNullOrWhiteSpace($userPath)) {
+        foreach ($p in ($userPath -split ';')) {
+            if ($p -match "hermes") {
+                Add-PathEntry $p.TrimEnd('\')
+            }
+        }
+    }
     Add-KnownBinDirectories
 }
 

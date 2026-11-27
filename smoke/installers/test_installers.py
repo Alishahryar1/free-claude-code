@@ -986,9 +986,21 @@ chmod +x "$HOME/.opencode/bin/opencode"
         """#!/bin/sh
 echo "hermes-install:$*" >> "$CALL_LOG"
 [ "$FAIL_STEP" = "hermes-install" ] && exit 26
-mkdir -p "$HOME/.local/bin"
-cp "$FAKE_FIXTURES/hermes-command.sh" "$HOME/.local/bin/hermes"
-chmod +x "$HOME/.local/bin/hermes"
+hermes_bin="${HERMES_BIN_DIR:-}"
+if [ -z "$hermes_bin" ]; then
+    if [ -n "${HERMES_HOME:-}" ]; then
+        hermes_bin="$HERMES_HOME/bin"
+    elif [ "${HERMES_INSTALL_LOCATION:-}" = "legacy" ]; then
+        hermes_bin="$HOME/.local/bin"
+    elif [ "${HERMES_INSTALL_LOCATION:-}" = "xdg-share" ]; then
+        hermes_bin="${XDG_DATA_HOME:-$HOME/.local/share}/hermes/bin"
+    else
+        hermes_bin="$HOME/.hermes/bin"
+    fi
+fi
+mkdir -p "$hermes_bin"
+cp "$FAKE_FIXTURES/hermes-command.sh" "$hermes_bin/hermes"
+chmod +x "$hermes_bin/hermes"
 """,
     )
     _write_executable(
@@ -1153,6 +1165,9 @@ printf '%s  %s\n' "$checksum" "$1"
     env.pop("UV_TOOL_BIN_DIR", None)
     env.pop("CARGO_HOME", None)
     env.pop("GROK_BIN_DIR", None)
+    env.pop("HERMES_HOME", None)
+    env.pop("HERMES_BIN_DIR", None)
+    env.pop("HERMES_INSTALL_LOCATION", None)
     return PosixHarness(tmp_path, bin_dir, fixtures, tool_bin, log, env)
 
 
@@ -1397,6 +1412,45 @@ def test_install_sh_installs_selected_hermes_without_setup(
     assert "Run Hermes Agent with: fcc-hermes" in result.stdout
     assert not any("hermes:setup" in call for call in calls)
     assert not any(call.startswith("rtk:init") for call in calls)
+    assert (Path(posix_harness.env["HOME"]) / ".hermes" / "bin" / "hermes").is_file()
+
+
+def test_install_sh_discovers_hermes_in_hermes_home(
+    posix_harness: PosixHarness,
+) -> None:
+    (posix_harness.bin_dir / "opencode").unlink()
+    custom_hermes_home = posix_harness.root / "custom-hermes"
+    posix_harness.env["HERMES_HOME"] = str(custom_hermes_home)
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\nn\n")
+
+    assert result.returncode == 0, result.stdout
+    assert (custom_hermes_home / "bin" / "hermes").is_file()
+    calls = posix_harness.calls()
+    assert calls.index("hermes-install:--non-interactive --skip-setup") < calls.index(
+        "hermes:--version"
+    )
+
+
+def test_install_sh_discovers_hermes_in_xdg_data_home(
+    posix_harness: PosixHarness,
+) -> None:
+    (posix_harness.bin_dir / "opencode").unlink()
+    posix_harness.env["HERMES_INSTALL_LOCATION"] = "xdg-share"
+    result = posix_harness.run_interactive("n\nn\nn\nn\nn\ny\nn\nn\nn\nn\nn\nn\n")
+
+    assert result.returncode == 0, result.stdout
+    assert (
+        Path(posix_harness.env["HOME"])
+        / ".local"
+        / "share"
+        / "hermes"
+        / "bin"
+        / "hermes"
+    ).is_file()
+    calls = posix_harness.calls()
+    assert calls.index("hermes-install:--non-interactive --skip-setup") < calls.index(
+        "hermes:--version"
+    )
 
 
 @pytest.mark.parametrize("failure", ["hermes-download", "hermes-install"])
@@ -2870,7 +2924,17 @@ param(
     [switch] $NonInteractive
 )
 if ($env:FAIL_STEP -eq "hermes-install") { exit 65 }
-$bin = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\bin"
+$bin = if ($env:HERMES_BIN_DIR) {
+    $env:HERMES_BIN_DIR
+} elseif ($env:HERMES_HOME) {
+    Join-Path $env:HERMES_HOME "bin"
+} elseif ($env:HERMES_INSTALL_LOCATION -eq "userprofile") {
+    Join-Path $env:USERPROFILE ".hermes\bin"
+} elseif ($env:HERMES_INSTALL_LOCATION -eq "legacy") {
+    Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\bin"
+} else {
+    Join-Path $env:LOCALAPPDATA "hermes\bin"
+}
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 Copy-Item (Join-Path $env:FAKE_FIXTURES "hermes-command.cmd") (Join-Path $bin "hermes.cmd") -Force
 Add-Content -LiteralPath $env:CALL_LOG -Value "hermes-install:${NonInteractive}"
@@ -3188,6 +3252,9 @@ $installer = [scriptblock]::Create($installerSource)
     env.pop("UV_TOOL_BIN_DIR", None)
     env.pop("CARGO_HOME", None)
     env.pop("GROK_BIN_DIR", None)
+    env.pop("HERMES_HOME", None)
+    env.pop("HERMES_BIN_DIR", None)
+    env.pop("HERMES_INSTALL_LOCATION", None)
     return PowerShellHarness(
         tmp_path, bin_dir, fixtures, tool_bin, log, env, powershell, wrapper
     )
@@ -4113,6 +4180,68 @@ def test_install_ps1_installs_hermes_noninteractively(
     result = powershell_harness.run_functions("Ensure-Hermes")
 
     assert result.returncode == 0, result.stderr
+    assert (
+        Path(powershell_harness.env["LOCALAPPDATA"]) / "hermes" / "bin" / "hermes.cmd"
+    ).is_file()
+    calls = powershell_harness.calls()
+    assert calls.index("hermes-install:True") < calls.index("hermes:--version")
+
+
+def test_install_ps1_discovers_hermes_in_userprofile_directory(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    powershell_harness.env["HERMES_INSTALL_LOCATION"] = "userprofile"
+    result = powershell_harness.run_functions("Ensure-Hermes")
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        Path(powershell_harness.env["USERPROFILE"]) / ".hermes" / "bin" / "hermes.cmd"
+    ).is_file()
+    calls = powershell_harness.calls()
+    assert calls.index("hermes-install:True") < calls.index("hermes:--version")
+
+
+def test_install_ps1_discovers_hermes_in_hermes_home(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    custom_hermes_home = powershell_harness.root / "custom-hermes"
+    powershell_harness.env["HERMES_HOME"] = str(custom_hermes_home)
+    result = powershell_harness.run_functions("Ensure-Hermes")
+
+    assert result.returncode == 0, result.stderr
+    assert (custom_hermes_home / "bin" / "hermes.cmd").is_file()
+    calls = powershell_harness.calls()
+    assert calls.index("hermes-install:True") < calls.index("hermes:--version")
+
+
+def test_install_ps1_discovers_hermes_from_user_path(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    custom_hermes_bin = powershell_harness.root / "user-registered-hermes" / "bin"
+    powershell_harness.env["HERMES_BIN_DIR"] = str(custom_hermes_bin)
+    powershell_harness.env["FCC_TEST_USER_PATH"] = str(custom_hermes_bin)
+    result = powershell_harness.run_functions("Ensure-Hermes")
+
+    assert result.returncode == 0, result.stderr
+    assert (custom_hermes_bin / "hermes.cmd").is_file()
+    calls = powershell_harness.calls()
+    assert calls.index("hermes-install:True") < calls.index("hermes:--version")
+
+
+def test_install_ps1_discovers_hermes_in_legacy_agent_bin(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    powershell_harness.env["HERMES_INSTALL_LOCATION"] = "legacy"
+    result = powershell_harness.run_functions("Ensure-Hermes")
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        Path(powershell_harness.env["LOCALAPPDATA"])
+        / "hermes"
+        / "hermes-agent"
+        / "bin"
+        / "hermes.cmd"
+    ).is_file()
     calls = powershell_harness.calls()
     assert calls.index("hermes-install:True") < calls.index("hermes:--version")
 
