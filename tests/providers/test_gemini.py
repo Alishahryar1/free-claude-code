@@ -698,3 +698,34 @@ async def test_native_history_modes_share_attempt_budget_and_restore_source() ->
         for body in bodies
     ]
     assert thoughts == [["old thought", "current thought"], ["current thought"], []]
+
+@pytest.mark.asyncio
+async def test_native_provider_excludes_session_id_from_upstream_body():
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return _sse([{"text": "answer"}])
+
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(),
+        transport=httpx.MockTransport(reply),
+    )
+    req = GeminiRequest.model_validate(
+        {
+            "model": "models/gemini-2.5-flash",
+            "sessionId": "acp-session-test-id",
+            "contents": [{"parts": [{"text": "hello"}]}],
+        }
+    )
+    try:
+        await _collect("gemini", provider.stream_gemini(req))
+    finally:
+        await provider.cleanup()
+
+    assert len(bodies) == 1
+    assert "sessionId" not in bodies[0]
+    assert "session_id" not in bodies[0]
+    assert "model" not in bodies[0]
+

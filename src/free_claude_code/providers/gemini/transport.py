@@ -237,7 +237,9 @@ class _GeminiAttempt(TransportAttempt):
             params={"alt": "sse"},
             headers=headers,
             json={
-                key: value for key, value in self.sent_body.items() if key != "model"
+                key: value
+                for key, value in self.sent_body.items()
+                if key not in {"model", "sessionId", "session_id"}
             },
         )
 
