@@ -168,6 +168,39 @@ def test_allowed_tools_rejects_unsupported_translation_clearly(
         destination(request)
 
 
+_OPENAI_HINTS: JsonObject = {
+    "prompt_cache_key": "session",
+    "prompt_cache_retention": "in_memory",
+    "safety_identifier": "person",
+    "user": "person",
+}
+
+
+@pytest.mark.parametrize("destination", [chat_messages_body, chat_to_gemini])
+def test_openai_request_hints_are_omitted_on_other_protocols(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
+    plain: JsonObject = {
+        "model": "model",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    hinted = ChatRequest.model_validate({**plain, **_OPENAI_HINTS})
+    assert destination(hinted) == destination(ChatRequest.model_validate(plain))
+
+
+def test_openai_request_hints_reach_responses() -> None:
+    result = chat_responses_body(
+        ChatRequest.model_validate(
+            {
+                "model": "model",
+                "messages": [{"role": "user", "content": "hello"}],
+                **_OPENAI_HINTS,
+            }
+        )
+    )
+    assert {key: result.get(key) for key in _OPENAI_HINTS} == _OPENAI_HINTS
+
+
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_to_gemini])
 def test_refusal_history_keeps_its_text_across_other_protocols(
     destination: Callable[[ChatRequest], JsonObject],

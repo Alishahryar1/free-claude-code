@@ -5,8 +5,13 @@ from typing import Any, cast
 import pytest
 
 from free_claude_code.core.chat_completions.request import ChatRequest
-from free_claude_code.core.gemini.native_request import chat_to_gemini
+from free_claude_code.core.gemini import GeminiConversionError
+from free_claude_code.core.gemini.native_request import (
+    chat_to_gemini,
+    responses_to_gemini,
+)
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from tests.wire_payload import object_array, object_payload
 
 
@@ -184,3 +189,29 @@ def test_messages_noop_context_management_keeps_claude_code_compatible() -> None
     result = messages_to_gemini(request)
     assert result["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
     assert "context_management" not in result
+
+
+def test_responses_openai_request_hints_are_omitted() -> None:
+    plain = {"model": "gemini-2.5-flash", "input": "hello"}
+    hinted = OpenAIResponsesRequest.model_validate(
+        {
+            **plain,
+            "prompt_cache_key": "session",
+            "prompt_cache_retention": "24h",
+            "safety_identifier": "person",
+            "user": "person",
+        }
+    )
+    assert responses_to_gemini(hinted) == responses_to_gemini(
+        OpenAIResponsesRequest.model_validate(plain)
+    )
+
+    bad_request = OpenAIResponsesRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "input": "hello",
+            "unsupported_future_field": True,
+        }
+    )
+    with pytest.raises(GeminiConversionError, match="unsupported_future_field"):
+        responses_to_gemini(bad_request)
