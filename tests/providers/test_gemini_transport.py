@@ -430,7 +430,9 @@ async def test_responses_gemini_replay_uses_output_order_not_completion_order(
         for item in object_array(bodies[-1]["input"])
         if item.get("encrypted_content")
     ]
-    assert native == [first, second]
+    # Without visible thoughts the bundle carries no echo positions, so the
+    # original record order is the only order available to restore.
+    assert native == ([second, first] if visible else [first, second])
     unsigned = [
         item
         for item in object_array(bodies[-1]["input"])
@@ -439,6 +441,16 @@ async def test_responses_gemini_replay_uses_output_order_not_completion_order(
     assert "".join(
         text for item in unsigned for text, _ in readable_reasoning(item)
     ) == ("Independent" if visible else "")
+    reasoning = [
+        item
+        for item in object_array(bodies[-1]["input"])
+        if item.get("type") == "reasoning"
+    ]
+    assert [item.get("encrypted_content") for item in reasoning] == (
+        ["cipher-second", None, "cipher-first"]
+        if visible
+        else ["cipher-first", "cipher-second"]
+    )
 
 
 @pytest.mark.asyncio

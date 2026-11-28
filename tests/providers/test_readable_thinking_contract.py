@@ -267,12 +267,27 @@ async def test_parsed_thinking_is_not_owned_by_native_signature(
         (native, "signed-native")
     ]
     assert signed == [detail]
-    assert (
-        "".join(
+    if wire == "gemini":
+        # Structured chat upstreams keep the parsed block as its own unsigned
+        # detail next to the signed record, never owned by the native signature.
+        unsigned = [
+            item
+            for message in messages
+            for item in object_array(message.get("reasoning_details", []))
+            if not item.get("signature") and not item.get("data")
+        ]
+        assert [item["text"] for item in unsigned] == [parsed]
+        assert not any(
             string_payload(message.get("reasoning_content", "")) for message in messages
         )
-        == parsed
-    )
+    else:
+        assert (
+            "".join(
+                string_payload(message.get("reasoning_content", ""))
+                for message in messages
+            )
+            == parsed
+        )
 
 
 @pytest.mark.asyncio
@@ -419,10 +434,20 @@ async def test_gemini_protected_owners_survive_reused_indices_and_client_echo(
             )
         )
     assistant = object_array(bodies[-1]["messages"])[0]
-    assert assistant["reasoning_details"] == [first, second]
-    assert assistant.get("reasoning_content", "") == (
-        "" if echo == "cli" else "Unsigned.Ordinary.Tail."
-    )
+    # Structured chat upstreams keep every readable and protected block in
+    # the original stream order, not a trailing scalar plus adjacent carriers.
+    if echo == "cli":
+        # Gemini CLI drops thought Parts, so only protected records survive.
+        assert assistant["reasoning_details"] == [first, second]
+    else:
+        assert assistant["reasoning_details"] == [
+            {"type": "reasoning.text", "text": "Unsigned."},
+            first,
+            {"type": "reasoning.text", "text": "Ordinary."},
+            second,
+            {"type": "reasoning.text", "text": "Tail."},
+        ]
+    assert assistant.get("reasoning_content", "") == ""
 
 
 def test_retry_keeps_open_thinking_from_the_earlier_attempt_for_fallback() -> None:

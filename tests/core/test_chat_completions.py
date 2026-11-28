@@ -13,6 +13,11 @@ from free_claude_code.core.chat_completions.request import (
     chat_responses_body,
 )
 from free_claude_code.core.gemini.native_request import chat_to_gemini
+from free_claude_code.core.history_replay import (
+    ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
+)
 from free_claude_code.core.json_types import JsonObject
 from tests.wire_payload import object_array
 
@@ -219,3 +224,107 @@ def test_refusal_history_keeps_its_text_across_other_protocols(
         ]
     else:
         assert result["contents"][0]["parts"] == [{"text": "I cannot do that."}]
+
+
+@pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
+def test_echoed_chat_reasoning_keeps_signed_before_unsigned(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
+    origin = ReplayOrigin("test", "chat", "endpoint", "account", "model")
+    record = ReplayRecord(
+        origin,
+        {
+            "type": "reasoning",
+            "encrypted_content": "cipher-signed",
+            "reasoning_details": [{"type": "reasoning.text", "text": "A"}],
+        },
+    )
+    request = ChatRequest(
+        model="model",
+        messages=[
+            {
+                "role": "assistant",
+                "content": "answer",
+                "reasoning_details": [
+                    {"type": "reasoning.text", "id": "signed", "text": "A"},
+                    {
+                        "type": "reasoning.encrypted",
+                        "id": "signed",
+                        "data": encode_replay(record),
+                    },
+                    {"type": "reasoning.text", "id": "unsigned", "text": "B"},
+                ],
+            }
+        ],
+    )
+    result = destination(request)
+    carrier = {"type": "reasoning", "encrypted_content": encode_replay(record)}
+    if destination is chat_messages_body:
+        parts = object_array(object_array(result["messages"])[0]["content"])
+        assert parts[0] == {"type": "redacted_thinking", "data": encode_replay(record)}
+        assert parts[1] == {"type": "thinking", "thinking": "B"}
+        assert parts[2] == {"type": "text", "text": "answer"}
+    else:
+        items = object_array(result["input"])
+        assert items[0] == carrier
+        assert object_array(items[1]["content"])[0] == {
+            "type": "reasoning_text",
+            "text": "B",
+        }
+        assert object_array(items[2]["content"])[0] == {
+            "type": "output_text",
+            "text": "answer",
+        }
+
+
+@pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
+def test_late_carrier_takes_the_position_of_its_readable_echo(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
+    # Streamed readable deltas can be echoed before the signed record's carrier
+    # arrives. The carrier must replace the deltas in place, not land after them.
+    origin = ReplayOrigin("test", "chat", "endpoint", "account", "model")
+    record = ReplayRecord(
+        origin,
+        {
+            "type": "reasoning",
+            "encrypted_content": "cipher-signed",
+            "reasoning_details": [{"type": "reasoning.text", "text": "A"}],
+        },
+    )
+    request = ChatRequest(
+        model="model",
+        messages=[
+            {
+                "role": "assistant",
+                "content": "answer",
+                "reasoning_details": [
+                    {"type": "reasoning.text", "id": "signed", "text": "A"},
+                    {"type": "reasoning.text", "id": "unsigned", "text": "B"},
+                    {
+                        "type": "reasoning.encrypted",
+                        "id": "signed",
+                        "data": encode_replay(record),
+                    },
+                ],
+            }
+        ],
+    )
+    result = destination(request)
+    carrier = {"type": "reasoning", "encrypted_content": encode_replay(record)}
+    if destination is chat_messages_body:
+        parts = object_array(object_array(result["messages"])[0]["content"])
+        assert parts[0] == {"type": "redacted_thinking", "data": encode_replay(record)}
+        assert parts[1] == {"type": "thinking", "thinking": "B"}
+        assert parts[2] == {"type": "text", "text": "answer"}
+    else:
+        items = object_array(result["input"])
+        assert items[0] == carrier
+        assert object_array(items[1]["content"])[0] == {
+            "type": "reasoning_text",
+            "text": "B",
+        }
+        assert object_array(items[2]["content"])[0] == {
+            "type": "output_text",
+            "text": "answer",
+        }

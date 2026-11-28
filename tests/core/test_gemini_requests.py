@@ -2,6 +2,7 @@
 
 import base64
 from copy import deepcopy
+from hashlib import sha256
 
 import pytest
 from pydantic import ValidationError
@@ -24,6 +25,7 @@ from free_claude_code.core.gemini.schema import json_schema
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
     ReplayRecord,
+    encode_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
@@ -321,3 +323,73 @@ def test_conflicting_echoed_replay_bundles_are_not_silently_deduplicated() -> No
     )
     with pytest.raises(GeminiConversionError, match="Conflicting"):
         build_gemini_chat_request(value)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+def test_protected_replay_restores_the_echoed_order(protocol: str) -> None:
+    origin = ReplayOrigin("test", "responses", "endpoint", "account", "model")
+    first = ReplayRecord(
+        origin, {"type": "reasoning", "encrypted_content": "cipher-first"}
+    )
+    second = ReplayRecord(
+        origin, {"type": "reasoning", "encrypted_content": "cipher-second"}
+    )
+    echoed = "firstmiddlesecond"
+    bundle = ReplayBundle(
+        "response",
+        (first, second),
+        thought_echo_sha256=sha256(echoed.encode("utf-8")).hexdigest(),
+        protected_echo=((1, 0, 5), (0, 11, 17)),
+    )
+    value = request(
+        contents=[
+            {
+                "role": "model",
+                "parts": [
+                    {"thought": True, "text": "first"},
+                    {"thought": True, "text": "middle"},
+                    {"thought": True, "text": "second"},
+                    {"text": "answer"},
+                    {"thoughtSignature": encode_bundle(bundle)},
+                ],
+            },
+            {"role": "user", "parts": [{"text": "continue"}]},
+        ]
+    )
+    body = build(value, protocol).body
+    if protocol == "messages":
+        content = object_array(object_array(body["messages"])[0]["content"])
+        assert content == [
+            {"type": "redacted_thinking", "data": encode_replay(second)},
+            {"type": "thinking", "thinking": "middle"},
+            {"type": "redacted_thinking", "data": encode_replay(first)},
+            {"type": "text", "text": "answer"},
+        ]
+    elif protocol == "responses":
+        items = object_array(body["input"])
+        assert items[0] == {
+            "type": "reasoning",
+            "encrypted_content": encode_replay(second),
+        }
+        assert object_array(items[1]["content"])[0] == {
+            "type": "reasoning_text",
+            "text": "middle",
+        }
+        assert items[2] == {
+            "type": "reasoning",
+            "encrypted_content": encode_replay(first),
+        }
+        assert object_array(items[3]["content"])[0] == {
+            "type": "output_text",
+            "text": "answer",
+        }
+    else:
+        assistant = object_array(body["messages"])[0]
+        # Readable thoughts share the ordered detail array with carriers so the
+        # final Chat request keeps protected → readable → protected stream order.
+        assert "reasoning_content" not in assistant
+        assert object_array(assistant["reasoning_details"]) == [
+            {"type": "reasoning.encrypted", "data": encode_replay(second)},
+            {"type": "reasoning.text", "text": "middle"},
+            {"type": "reasoning.encrypted", "data": encode_replay(first)},
+        ]

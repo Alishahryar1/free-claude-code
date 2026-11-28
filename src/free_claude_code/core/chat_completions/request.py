@@ -282,28 +282,31 @@ def _messages_content(value: JsonValue) -> list[JsonValue]:
 
 def _reasoning_items(message: JsonObject) -> list[JsonObject]:
     details = json_objects(message.get("reasoning_details") or [])
-    readable: list[tuple[JsonValue, str, bool]] = [
-        (None, text, False)
+    # The detail array is in stream order. Keep each item's position so an
+    # echo restoring signed and unsigned blocks does not reverse their order.
+    readable: list[tuple[int, JsonValue | None, str, bool]] = [
+        (-1, None, text, False)
         for key in ("reasoning_content", "reasoning")
         if isinstance(text := message.get(key), str) and text
     ]
-    carriers: list[JsonObject] = []
-    for detail in details:
+    carriers: list[tuple[int, JsonObject]] = []
+    replace_at: dict[int, int] = {}
+    for position, detail in enumerate(details):
         kind = detail.get("type")
         if kind == "reasoning.encrypted":
-            carriers.append(detail)
+            carriers.append((position, detail))
         elif kind in ("reasoning.text", "reasoning.summary"):
             if detail.get("signature"):
                 raise ChatConversionError(
                     "Signed reasoning details require native Chat egress"
                 )
             readable.extend(
-                (detail.get("id"), text, summary)
+                (position, detail.get("id"), text, summary)
                 for text, summary in readable_reasoning({"reasoning_details": [detail]})
             )
         else:
             raise ChatConversionError("Unsupported reasoning detail")
-    for detail in carriers:
+    for index, (_, detail) in enumerate(carriers):
         data = detail.get("data")
         if not is_replay(data):
             continue
@@ -315,7 +318,7 @@ def _reasoning_items(message: JsonObject) -> list[JsonObject]:
             for summary in (False, True):
                 echoed = "".join(
                     text
-                    for owner, text, kind in readable
+                    for _, owner, text, kind in readable
                     if owner == source and kind == summary
                 )
                 original = "".join(text for text, kind in native if kind == summary)
@@ -323,36 +326,60 @@ def _reasoning_items(message: JsonObject) -> list[JsonObject]:
                     raise ChatConversionError(
                         "Readable reasoning changed its protected replay record"
                     )
-            readable = [part for part in readable if part[0] != source]
+            removed = [part for part in readable if part[1] == source]
+            if removed:
+                # A carrier streamed after its readable deltas takes the place
+                # those deltas held, so signed/unsigned order is preserved.
+                replace_at[index] = min(part[0] for part in removed)
+            readable = [part for part in readable if part[1] != source]
         else:
             # Older Chat writers emit one scalar echo with an unlabelled carrier.
             represented = {
                 ("".join(text for text, kind in native if kind == summary), summary)
                 for summary in (False, True)
             }
-            readable = [
-                (owner, text, summary)
-                for owner, text, summary in readable
-                if owner is not None or (text, summary) not in represented
+            removed = [
+                part
+                for part in readable
+                if part[1] is None and (part[2], part[3]) in represented
             ]
-    items: list[JsonObject] = []
-    for _, text, summary in readable:
-        items.append(
-            {
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": text}] if summary else [],
-                **(
-                    {}
+            if removed:
+                replace_at[index] = min(part[0] for part in removed)
+            readable = [
+                part
+                for part in readable
+                if part[1] is not None or (part[2], part[3]) not in represented
+            ]
+    rendered: list[tuple[int, int, JsonObject]] = []
+    for position, _, text, summary in readable:
+        rendered.append(
+            (
+                position,
+                0,
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": text}]
                     if summary
-                    else {"content": [{"type": "reasoning_text", "text": text}]}
-                ),
-            }
+                    else [],
+                    **(
+                        {}
+                        if summary
+                        else {"content": [{"type": "reasoning_text", "text": text}]}
+                    ),
+                },
+            )
         )
-    items.extend(
-        {"type": "reasoning", "encrypted_content": detail["data"]}
-        for detail in carriers
-    )
-    return items
+    for index, (position, detail) in enumerate(carriers):
+        rendered.append(
+            (
+                replace_at.get(index, position),
+                1,
+                {"type": "reasoning", "encrypted_content": detail["data"]},
+            )
+        )
+    return [
+        item for _, _, item in sorted(rendered, key=lambda entry: (entry[0], entry[1]))
+    ]
 
 
 def _tools(body: JsonObject) -> list[JsonObject]:
