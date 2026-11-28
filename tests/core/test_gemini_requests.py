@@ -385,8 +385,11 @@ def test_protected_replay_restores_the_echoed_order(protocol: str) -> None:
         }
     else:
         assistant = object_array(body["messages"])[0]
-        assert assistant["reasoning_content"] == "middle"
+        # Readable thoughts share the ordered detail array with carriers so the
+        # final Chat request keeps protected → readable → protected stream order.
+        assert "reasoning_content" not in assistant
         assert object_array(assistant["reasoning_details"]) == [
             {"type": "reasoning.encrypted", "data": encode_replay(second)},
+            {"type": "reasoning.text", "text": "middle"},
             {"type": "reasoning.encrypted", "data": encode_replay(first)},
         ]

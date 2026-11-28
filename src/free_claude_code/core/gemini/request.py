@@ -63,7 +63,9 @@ def _image(image: InlineData, destination: Destination) -> JsonObject:
     return {"type": "image_url", "image_url": {"url": image.url()}}
 
 
-def _thought(items: list[JsonObject], text: str, destination: Destination) -> None:
+def _thought(
+    items: list[JsonObject], text: str, destination: Destination, ordered: bool = False
+) -> None:
     if destination == "messages":
         _append(items, "assistant", {"type": "thinking", "thinking": text})
     elif destination == "responses":
@@ -74,6 +76,14 @@ def _thought(items: list[JsonObject], text: str, destination: Destination) -> No
                 "summary": [],
             }
         )
+    elif ordered:
+        # Positioned echo: readable text shares the carrier detail array so the
+        # final Chat message keeps protected and readable blocks in stream order.
+        if not items or items[-1].get("role") != "assistant":
+            items.append({"role": "assistant", "content": []})
+        details = items[-1].setdefault("reasoning_details", [])
+        assert isinstance(details, list)
+        details.append({"type": "reasoning.text", "text": text})
     else:
         if not items or items[-1].get("role") != "assistant":
             items.append({"role": "assistant", "content": []})
@@ -83,11 +93,14 @@ def _thought(items: list[JsonObject], text: str, destination: Destination) -> No
 
 
 def _reasoning_record(
-    items: list[JsonObject], record: ReplayRecord, destination: Destination
+    items: list[JsonObject],
+    record: ReplayRecord,
+    destination: Destination,
+    ordered: bool = False,
 ) -> None:
     if not protected_reasoning(record.native):
         for text, _ in readable_reasoning(record.native):
-            _thought(items, text, destination)
+            _thought(items, text, destination, ordered)
         return
     carrier = encode_replay(record)
     if destination == "messages":
@@ -184,7 +197,7 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
                 positioned_records = {index for index, _, _ in spans}
                 for index, record in enumerate(records):
                     if index not in positioned_records:
-                        _reasoning_record(items, record, destination)
+                        _reasoning_record(items, record, destination, True)
         span_index = 0
         emitted_records: set[int] = set()
         for part in content.parts:
@@ -298,7 +311,7 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
                                 and 0 <= record_index < len(records)
                             ):
                                 _reasoning_record(
-                                    items, records[record_index], destination
+                                    items, records[record_index], destination, True
                                 )
                                 emitted_records.add(record_index)
                             span_index += 1
@@ -310,12 +323,15 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
                                 items,
                                 text[cursor - thought_offset : left - thought_offset],
                                 destination,
+                                True,
                             )
                         if (
                             record_index not in emitted_records
                             and 0 <= record_index < len(records)
                         ):
-                            _reasoning_record(items, records[record_index], destination)
+                            _reasoning_record(
+                                items, records[record_index], destination, True
+                            )
                             emitted_records.add(record_index)
                         cursor = min(right, end)
                         if right <= end:
@@ -323,7 +339,12 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
                         if cursor >= end:
                             break
                     if cursor < end:
-                        _thought(items, text[cursor - thought_offset :], destination)
+                        _thought(
+                            items,
+                            text[cursor - thought_offset :],
+                            destination,
+                            positioned,
+                        )
                     thought_offset = end
                     continue
                 kind = "output_text" if role == "assistant" else "input_text"
@@ -338,7 +359,7 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
         while span_index < len(spans):
             record_index, _, _ = spans[span_index]
             if record_index not in emitted_records and 0 <= record_index < len(records):
-                _reasoning_record(items, records[record_index], destination)
+                _reasoning_record(items, records[record_index], destination, True)
                 emitted_records.add(record_index)
             span_index += 1
         flush_images()

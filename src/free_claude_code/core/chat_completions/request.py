@@ -290,6 +290,7 @@ def _reasoning_items(message: JsonObject) -> list[JsonObject]:
         if isinstance(text := message.get(key), str) and text
     ]
     carriers: list[tuple[int, JsonObject]] = []
+    replace_at: dict[int, int] = {}
     for position, detail in enumerate(details):
         kind = detail.get("type")
         if kind == "reasoning.encrypted":
@@ -305,7 +306,7 @@ def _reasoning_items(message: JsonObject) -> list[JsonObject]:
             )
         else:
             raise ChatConversionError("Unsupported reasoning detail")
-    for _, detail in carriers:
+    for index, (_, detail) in enumerate(carriers):
         data = detail.get("data")
         if not is_replay(data):
             continue
@@ -325,6 +326,11 @@ def _reasoning_items(message: JsonObject) -> list[JsonObject]:
                     raise ChatConversionError(
                         "Readable reasoning changed its protected replay record"
                     )
+            removed = [part for part in readable if part[1] == source]
+            if removed:
+                # A carrier streamed after its readable deltas takes the place
+                # those deltas held, so signed/unsigned order is preserved.
+                replace_at[index] = min(part[0] for part in removed)
             readable = [part for part in readable if part[1] != source]
         else:
             # Older Chat writers emit one scalar echo with an unlabelled carrier.
@@ -332,6 +338,13 @@ def _reasoning_items(message: JsonObject) -> list[JsonObject]:
                 ("".join(text for text, kind in native if kind == summary), summary)
                 for summary in (False, True)
             }
+            removed = [
+                part
+                for part in readable
+                if part[1] is None and (part[2], part[3]) in represented
+            ]
+            if removed:
+                replace_at[index] = min(part[0] for part in removed)
             readable = [
                 part
                 for part in readable
@@ -356,10 +369,10 @@ def _reasoning_items(message: JsonObject) -> list[JsonObject]:
                 },
             )
         )
-    for position, detail in carriers:
+    for index, (position, detail) in enumerate(carriers):
         rendered.append(
             (
-                position,
+                replace_at.get(index, position),
                 1,
                 {"type": "reasoning", "encrypted_content": detail["data"]},
             )

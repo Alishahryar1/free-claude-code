@@ -1006,7 +1006,13 @@ def _prepare_chat_content(
                     for text, _ in parts:
                         _append_context(message, text)
             elif include:
-                full.extend(text for text, _ in parts)
+                if structured_details and record is None:
+                    # Structured upstreams accept the ordered detail array, so
+                    # unsigned readable blocks keep their position instead of
+                    # collapsing into the trailing scalar field.
+                    values.append(detail)
+                else:
+                    full.extend(text for text, _ in parts)
             for value in values:
                 paths[(*output_path, "reasoning_details", len(restored))] = (
                     *source_path,
