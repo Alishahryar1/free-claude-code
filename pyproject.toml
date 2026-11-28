@@ -87,7 +87,7 @@ required-version = ">=0.13.7"
 cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 # cryptography 49+ dropped macOS x86_64 (universal2) wheels, so Intel Macs can
 # only build it from sdist, which needs pkg-config and OpenSSL headers a stock
-# Mac lacks. 48.0.0 is the newest release still shipping universal2 wheels.
+# Mac lacks. 48.0.1 is the newest release still shipping universal2 wheels.
 constraint-dependencies = [
     "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
 ]
