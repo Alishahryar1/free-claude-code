@@ -8,6 +8,17 @@ def summarize_request_validation_body(
 ) -> tuple[list[JsonObject], list[str]]:
     """Return message shape summary and tool name list for debug logs."""
     messages = body.get("messages") if isinstance(body, dict) else None
+    if messages is None and isinstance(body, dict):
+        contents = body.get("contents")
+        if isinstance(contents, list):
+            # Gemini's GenerateContent route uses `contents` instead of
+            # `messages`. Summarize part shapes so rejected requests are
+            # diagnosable without logging any part text.
+            messages = [
+                {"role": content.get("role"), "content": content.get("parts")}
+                for content in contents
+                if isinstance(content, dict)
+            ]
     message_summary: list[JsonObject] = []
     if isinstance(messages, list):
         for msg in messages:

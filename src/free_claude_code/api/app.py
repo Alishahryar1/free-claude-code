@@ -133,6 +133,7 @@ def create_app(services: ApiServices) -> FastAPI:
             },
             error_locs=[list(error["loc"]) for error in errors],
             error_types=[error["type"] for error in errors],
+            error_messages=[error["msg"] for error in errors],
             message_summary=message_summary,
             tool_names=tool_names,
         )

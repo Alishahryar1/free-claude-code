@@ -2,7 +2,7 @@
 
 import json
 import logging
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -219,6 +219,44 @@ def test_invalid_or_unsupported_requests_are_rejected_before_inference(
     assert response.status_code == 400, response.text
     assert response.json()["error"]["status"] == "INVALID_ARGUMENT"
     assert not calls
+
+
+def test_validation_trace_reports_gemini_shape_and_error_message() -> None:
+    provider, calls = fixture_provider()
+    app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
+    with (
+        patch("free_claude_code.api.app.trace_event") as trace,
+        TestClient(app) as client,
+    ):
+        response = client.post(
+            "/v1beta/models/model:generateContent",
+            json={
+                **body(),
+                "generationConfig": {"thinkingConfig": {"thinkingLevel": "XHIGH"}},
+            },
+        )
+    assert response.status_code == 400, response.text
+    assert not calls
+    validation_calls = [
+        call.kwargs
+        for call in trace.call_args_list
+        if call.kwargs.get("event") == "server.request.validation_failed"
+    ]
+    assert len(validation_calls) == 1
+    fields = validation_calls[0]
+    messages = fields.get("error_messages")
+    assert isinstance(messages, list) and len(messages) == 1
+    assert messages[0] == (
+        "Input should be 'THINKING_LEVEL_UNSPECIFIED', 'MINIMAL', 'LOW', 'MEDIUM' or 'HIGH'"
+    )
+    assert fields["message_summary"] == [
+        {
+            "role": "user",
+            "content_kind": "list",
+            "block_types": ["dict"],
+            "block_keys": [["text"]],
+        }
+    ]
 
 
 @pytest.mark.parametrize(
